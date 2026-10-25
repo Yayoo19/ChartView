@@ -11,7 +11,7 @@ O desde la terminal:
 ```
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python main.py
+.venv\Scripts\python src\main.py
 ```
 
 ## Símbolos
@@ -74,7 +74,7 @@ La configuración se guarda en `%USERPROFILE%\.chartview\config.json`.
 - **Fibonacci y Gann:** Retroceso de Fibonacci automático (con extensiones), Zonas de tiempo de Fibonacci, Bandas de Fibonacci, Abanico de Gann, Cuadrado de 9 de Gann, Gann HiLo Activator. Se calculan sobre el máximo y el mínimo de las últimas N velas (parámetro «Velas a analizar»).
 - **Volatilidad:** ATR, NATR, Desviación estándar, Volatilidad histórica, %B, Ancho de Bollinger, Choppiness, Mass Index, Ulcer Index.
 
-Para agregar uno nuevo, decora una función en `chartview/indicators.py` con `@indicator(...)`. Aparece solo en los menús.
+Para agregar uno nuevo, decora una función en `src/indicators.py` con `@indicator(...)`. Aparece solo en los menús.
 
 ## Notas
 
