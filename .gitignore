@@ -1,0 +1,16 @@
+# Entorno virtual y caché de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# La configuración del usuario (listas, alertas, dibujos, clave de FRED) vive en
+# ~/.chartview y nunca dentro del proyecto; por si acaso:
+config.json
+.chartview/
