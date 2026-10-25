@@ -28,6 +28,7 @@ INTERVALS = {
     "4 horas": ("60m", "4h", True, "1y"),
     "1 día": ("1d", None, False, "2y"),
     "1 semana": ("1wk", None, False, "10y"),
+    "2 semanas": ("1wk", "2W", False, "10y"),
     "1 mes": ("1mo", None, False, "max"),
     "3 meses": ("1mo", "3M", False, "max"),
     "6 meses": ("1mo", "6M", False, "max"),
@@ -140,6 +141,22 @@ def _group_months(df: pd.DataFrame, months: int) -> pd.DataFrame:
     return out
 
 
+_WEEK0 = pd.Timestamp("1970-01-05")  # un lunes: ancla fija para que los bloques no cambien al recargar
+
+
+def _group_weeks(df: pd.DataFrame, weeks: int) -> pd.DataFrame:
+    """Agrupa velas semanales en bloques de ``weeks`` semanas que empiezan en lunes.
+
+    Los bloques se cuentan desde una fecha fija, así una vela de 2 semanas siempre
+    cubre las mismas dos semanas sin importar el periodo que se descargue.
+    """
+    days = (df.index.normalize() - _WEEK0).days
+    key = (days // (7 * weeks)).to_numpy()
+    out = df.groupby(key).agg(_OHLCV).dropna(subset=["Close"])
+    out.index = _WEEK0 + pd.to_timedelta(out.index.to_numpy() * 7 * weeks, unit="D")
+    return out
+
+
 def _series_to_ohlc(s: pd.Series, interval_label: str, period: str) -> pd.DataFrame:
     """Convierte una serie de valores (macro) en velas del intervalo pedido.
 
@@ -152,8 +169,10 @@ def _series_to_ohlc(s: pd.Series, interval_label: str, period: str) -> pd.DataFr
     elif _PERIOD_DAYS.get(period, 10 ** 7) < 10 ** 6:
         s = s[s.index >= s.index[-1] - pd.Timedelta(days=_PERIOD_DAYS[period])]
     df = pd.DataFrame({"Open": s, "High": s, "Low": s, "Close": s, "Volume": 0.0})
-    if interval_label == "1 semana":
+    if interval_label in ("1 semana", "2 semanas"):
         df = df.resample("W-MON", label="left", closed="left").agg(_OHLCV)
+        if interval_label == "2 semanas":
+            df = _group_weeks(df.dropna(subset=["Close"]), 2)
     elif interval_label in ("1 mes", "3 meses", "6 meses", "12 meses"):
         df = df.resample("MS").agg(_OHLCV)
         rule = INTERVALS[interval_label][1]
@@ -185,6 +204,8 @@ def load(symbol: str, interval_label: str, period: str):
     df["Volume"] = df["Volume"].fillna(0)
     if rule and rule.endswith("M"):
         df = _group_months(df, int(rule[:-1]))
+    elif rule and rule.endswith("W"):
+        df = _group_weeks(df, int(rule[:-1]))
     elif rule:
         df = df.resample(rule, origin="start_day").agg(_OHLCV).dropna(subset=["Close"])
     try:

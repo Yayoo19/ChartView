@@ -41,7 +41,7 @@ Con **Buscar** (Ctrl+F) puedes buscar por nombre ("Cemex", "Bitcoin", "bono 10",
 - **Indicadores** (Ctrl+I): catálogo por categorías, parámetros editables, color y orden. La flecha del botón agrega un indicador directo con valores por defecto.
 - Tipos de gráfica: velas, Heikin Ashi, barras OHLC, línea y área.
 - Casilla **Log** (Alt+L): escala logarítmica en la gráfica de precio, incluidos los indicadores dibujados sobre ella.
-- Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora. Las de 3, 6 y 12 meses se arman con velas mensuales, alineadas a trimestres, semestres y años del calendario.
+- Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora, y las de 2 semanas con velas semanales (siempre empiezan en lunes). Las de 3, 6 y 12 meses se arman con velas mensuales, alineadas a trimestres, semestres y años del calendario.
 - El panel de listas se puede cerrar con la ✕ o arrastrar a otro lado. Se vuelve a abrir con **☰ Listas** (primer botón de la barra) o Ctrl+B. La app recuerda dónde lo dejaste.
 - Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas, y con clic derecho copias un símbolo a otra lista.
 - **Dibujo** (barra vertical a la izquierda de la gráfica):
