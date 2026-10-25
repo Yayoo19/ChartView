@@ -4,15 +4,27 @@ Aplicación de escritorio en Python para graficar acciones de México (BMV), EE.
 
 ## Ejecutar
 
-Doble clic en `ChartView.bat`. La primera vez crea el entorno e instala las dependencias.
-
-O desde la terminal:
+Requiere Python 3.10 o más reciente. Desde la carpeta del proyecto, la primera vez:
 
 ```
 python -m venv .venv
+```
+
+Windows:
+
+```
 .venv\Scripts\python -m pip install -r requirements.txt
 .venv\Scripts\python src\main.py
 ```
+
+Linux / macOS:
+
+```
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python src/main.py
+```
+
+Las siguientes veces basta con la última línea.
 
 ## Símbolos
 

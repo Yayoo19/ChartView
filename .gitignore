@@ -14,3 +14,6 @@ Thumbs.db
 # ~/.chartview y nunca dentro del proyecto; por si acaso:
 config.json
 .chartview/
+
+# Lanzador local de Windows (no se versiona)
+*.bat
