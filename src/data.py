@@ -43,6 +43,7 @@ INTERVALS = {
     "1 semana": ("1wk", None, False, "10y"),
     "2 semanas": ("1wk", "2W", False, "10y"),
     "1 mes": ("1mo", None, False, "max"),
+    "2 meses": ("1mo", "2M", False, "max"),
     "3 meses": ("1mo", "3M", False, "max"),
     "6 meses": ("1mo", "6M", False, "max"),
     "12 meses": ("1mo", "12M", False, "max"),
@@ -148,8 +149,8 @@ _OHLCV = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume
 def _group_months(df: pd.DataFrame, months: int) -> pd.DataFrame:
     """Agrupa velas mensuales en bloques de calendario (trimestres, semestres, años).
 
-    Cada vela queda fechada al inicio de su bloque: 3 meses = ene/abr/jul/oct,
-    6 meses = ene/jul, 12 meses = 1 de enero.
+    Cada vela queda fechada al inicio de su bloque: 2 meses = ene/mar/may/jul/sep/nov,
+    3 meses = ene/abr/jul/oct, 6 meses = ene/jul, 12 meses = 1 de enero.
     """
     per_year = 12 // months
     key = df.index.year * per_year + (df.index.month - 1) // months
@@ -191,7 +192,7 @@ def _series_to_ohlc(s: pd.Series, interval_label: str, period: str) -> pd.DataFr
         df = df.resample("W-MON", label="left", closed="left").agg(_OHLCV)
         if interval_label == "2 semanas":
             df = _group_weeks(df.dropna(subset=["Close"]), 2)
-    elif interval_label in ("1 mes", "3 meses", "6 meses", "12 meses"):
+    elif interval_label in ("1 mes", "2 meses", "3 meses", "6 meses", "12 meses"):
         df = df.resample("MS").agg(_OHLCV)
         rule = INTERVALS[interval_label][1]
         if rule:
