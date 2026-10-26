@@ -40,6 +40,13 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 **Archivo → Búsqueda avanzada** (Ctrl+F) muestra los resultados en una tabla con bolsa y tipo.
 
+### Comparar, ratios y diferenciales
+
+- **Comparar** (botón ⇄ Comparar): agrega uno o más símbolos sobre la gráfica. El eje pasa a **% de cambio desde el inicio del periodo** (1A, 5A…, abajo de la gráfica), así todas las líneas arrancan en 0 %. La leyenda muestra el % y el precio de cada uno, y con ✕ (o clic derecho) quitas una comparación.
+- **Ratio:** escribe `A/B` en el buscador, por ejemplo `AAPL/^GSPC` (fuerza relativa contra el S&P 500), `GC=F/SI=F` (oro/plata) o `BTC-USD/ETH-USD`.
+- **Diferencial:** escribe `A - B` con espacios alrededor del guion, por ejemplo `MACRO:UST10Y - MACRO:UST2Y`. Los espacios hacen falta porque hay tickers con guion, como `BTC-USD`.
+- Los ratios y diferenciales se comportan como cualquier símbolo: velas, indicadores, dibujos, alertas y lista de seguimiento. Si los mercados tienen horarios distintos (cripto contra acciones), se usa el último dato disponible de cada uno.
+
 ## Interfaz
 
 - **Barra superior:** buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Alertas y ⟳ (actualizar).

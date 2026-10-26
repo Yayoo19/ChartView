@@ -317,6 +317,45 @@ class IndicatorDialog(QtWidgets.QDialog):
         self._set_buttons()
 
 
+class CompareDialog(QtWidgets.QDialog):
+    """Elegir un símbolo para comparar, con el mismo buscador de la barra superior."""
+
+    def __init__(self, known_symbols, parent=None):
+        from .searchbox import SymbolSearch
+
+        super().__init__(parent)
+        self.setWindowTitle("Comparar con…")
+        self.setMinimumWidth(460)
+        self.symbol: str | None = None
+        lay = QtWidgets.QVBoxLayout(self)
+        tip = QtWidgets.QLabel("Escribe un símbolo o un nombre. La gráfica mostrará el % de cambio de cada "
+                               "uno desde el inicio del periodo elegido abajo (1A, 5A…).")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#9598a1;")
+        lay.addWidget(tip)
+        self.search = SymbolSearch(known_symbols)
+        self.search.symbolChosen.connect(self._chosen)
+        lay.addWidget(self.search)
+        quick = QtWidgets.QHBoxLayout()
+        quick.addWidget(QtWidgets.QLabel("Rápidos:"))
+        for s in ("^GSPC", "^MXX", "QQQ", "BTC-USD", "GC=F", "HG=F", "MXN=X"):
+            b = QtWidgets.QPushButton(s)
+            b.clicked.connect(lambda _c=False, s=s: self._chosen(s, False))
+            quick.addWidget(b)
+        quick.addStretch(1)
+        lay.addLayout(quick)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Cancel)
+        bb.button(QtWidgets.QDialogButtonBox.Cancel).setText("Cancelar")
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        QtCore.QTimer.singleShot(0, self.search.setFocus)
+
+    def _chosen(self, sym: str, _by_name: bool):
+        if sym:
+            self.symbol = sym
+            self.accept()
+
+
 class SearchDialog(QtWidgets.QDialog):
     """Busca símbolos en Yahoo Finance por nombre o clave."""
 

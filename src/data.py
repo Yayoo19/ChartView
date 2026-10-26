@@ -18,6 +18,18 @@ MARKETS = ["EE.UU.", "México (BMV)", "Asia", "Cripto", macro.MARKET, "Directo"]
 # futuros de rendimiento (2YY=F, 10Y=F), futuros de notas/bonos (ZT 2 años, ZN 10 años, ZB 30 años) y ETFs
 YAHOO_BONDS = ["^IRX", "^FVX", "^TNX", "^TYX", "2YY=F", "10Y=F", "ZT=F", "ZN=F", "ZB=F", "SHY", "IEF", "TLT"]
 
+COMMODITIES_MARKET = "Materias primas"
+# futuros continuos de Yahoo (nombre en español e inglés para que el buscador los encuentre en ambos)
+COMMODITIES = {
+    "GC=F": "Oro (gold) · USD/onza", "SI=F": "Plata (silver) · USD/onza", "HG=F": "Cobre (copper) · USD/libra",
+    "PL=F": "Platino (platinum)", "PA=F": "Paladio (palladium)", "ALI=F": "Aluminio (aluminum) · USD/tonelada",
+    "CL=F": "Petróleo WTI (crude oil)", "BZ=F": "Petróleo Brent (brent oil)", "NG=F": "Gas natural (natural gas)",
+    "RB=F": "Gasolina (gasoline RBOB)", "HO=F": "Diésel (heating oil)",
+    "ZC=F": "Maíz (corn)", "ZW=F": "Trigo (wheat)", "ZS=F": "Soya (soybeans)", "KC=F": "Café (coffee)",
+    "SB=F": "Azúcar (sugar)", "CC=F": "Cacao (cocoa)", "CT=F": "Algodón (cotton)",
+    "LE=F": "Ganado bovino (live cattle)", "HE=F": "Cerdo (lean hogs)", "DX-Y.NYB": "Índice dólar (DXY)",
+}
+
 # etiqueta: (intervalo de Yahoo, regla de remuestreo, ¿intradía?, periodo por defecto)
 INTERVALS = {
     "1 minuto": ("1m", None, True, "5d"),
@@ -74,6 +86,7 @@ POPULAR = {
         "UNI7083-USD", "ATOM-USD", "NEAR-USD", "BTC-EUR", "ETH-BTC",
     ],
     macro.MARKET: [f"MACRO:{k}" for k in macro.CATALOG] + YAHOO_BONDS,
+    COMMODITIES_MARKET: list(COMMODITIES),
 }
 
 
@@ -105,6 +118,10 @@ def guess_market(symbol: str, meta: dict | None = None) -> str:
     if t == "CRYPTOCURRENCY":
         return "Cripto"
     s = symbol.upper()
+    if parse_expr(s):
+        return EXPR_MARKET
+    if s in COMMODITIES:
+        return COMMODITIES_MARKET
     if macro.is_macro(s) or s in YAHOO_BONDS:
         return macro.MARKET
     if s.endswith(".MX") or s == "^MXX" or s.startswith("MXN"):
@@ -182,8 +199,92 @@ def _series_to_ohlc(s: pd.Series, interval_label: str, period: str) -> pd.DataFr
     return df.dropna(subset=["Close"])
 
 
+EXPR_MARKET = "Ratios y diferenciales"
+
+
+def parse_expr(symbol: str):
+    """«A/B» -> ("/", A, B) · «A - B» -> ("-", A, B) · cualquier otro símbolo -> None.
+
+    El diferencial lleva espacios alrededor del «-» porque hay tickers con guion (BTC-USD).
+    """
+    s = symbol.strip().upper()
+    if " - " in s:
+        op, (a, b) = "-", s.split(" - ", 1)
+    elif "/" in s:
+        op, (a, b) = "/", s.split("/", 1)
+    else:
+        return None
+    a, b = a.strip(), b.strip()
+    return (op, a, b) if a and b else None
+
+
+def align_to(index: pd.DatetimeIndex, other: pd.DataFrame, intraday: bool) -> pd.DataFrame:
+    """Valores de ``other`` en las fechas de ``index``: el último dato disponible en o antes de cada una.
+
+    En intervalos diarios o mayores se comparan solo las fechas, porque cada mercado fecha sus
+    velas a una hora distinta (las de cripto a medianoche UTC, las de la BMV a la hora local).
+    """
+    key = index if intraday else index.normalize()
+    o = other.copy()
+    if not intraday:
+        o.index = o.index.normalize()
+    o = o[~o.index.duplicated(keep="last")].sort_index()
+    out = o.reindex(pd.DatetimeIndex(key), method="ffill")
+    out.index = index
+    return out
+
+
+def _combine(da: pd.DataFrame, db: pd.DataFrame, op: str, intraday: bool) -> pd.DataFrame:
+    cols = ["Open", "High", "Low", "Close"]
+    a = da[cols]
+    b = align_to(da.index, db[cols], intraday)
+    if op == "/":
+        b = b.where(b != 0)
+        o, c, h, l = a.Open / b.Open, a.Close / b.Close, a.High / b.High, a.Low / b.Low
+    else:
+        o, c, h, l = a.Open - b.Open, a.Close - b.Close, a.High - b.High, a.Low - b.Low
+    # el máximo/mínimo real dentro de la vela no se conoce; se acota para que la vela sea coherente
+    hi = pd.concat([o, c, h], axis=1).max(axis=1)
+    lo = pd.concat([o, c, l], axis=1).min(axis=1)
+    out = pd.DataFrame({"Open": o, "High": hi, "Low": lo, "Close": c, "Volume": 0.0}).dropna(subset=["Close"])
+    for col in ("Open", "High", "Low"):
+        out[col] = out[col].fillna(out["Close"])
+    return out
+
+
+def _load_expr(expr, interval_label: str, period: str):
+    op, a, b = expr
+    da, ma, used = load(a, interval_label, period)
+    db, mb, _ = load(b, interval_label, period)
+    df = _combine(da, db, op, INTERVALS[interval_label][2])
+    if df.empty:
+        raise ValueError(f"«{a}» y «{b}» no tienen fechas en común en el periodo elegido.")
+    na = short_name(ma.get("shortName") or ma.get("longName") or a)
+    nb = short_name(mb.get("shortName") or mb.get("longName") or b)
+    kind = "Ratio" if op == "/" else "Diferencial"
+    meta = {"longName": f"{na} {'÷' if op == '/' else '−'} {nb}", "currency": "",
+            "fullExchangeName": kind, "instrumentType": "EXPR"}
+    return df, meta, used
+
+
+def load_closes(symbols: list[str], index: pd.DatetimeIndex, interval_label: str, period: str) -> dict:
+    """Cierres de otros símbolos alineados a ``index`` (para comparar). {símbolo: array | mensaje de error}."""
+    out = {}
+    intraday = INTERVALS[interval_label][2]
+    for s in symbols:
+        try:
+            df, _, _ = load(s, interval_label, period)
+            out[s] = align_to(index, df[["Close"]], intraday)["Close"].to_numpy(dtype=float)
+        except Exception as e:  # noqa: BLE001 - se muestra en la barra de estado
+            out[s] = str(e) or e.__class__.__name__
+    return out
+
+
 def load(symbol: str, interval_label: str, period: str):
     """Devuelve (DataFrame OHLCV, metadatos, periodo usado)."""
+    expr = parse_expr(symbol)
+    if expr:
+        return _load_expr(expr, interval_label, period)
     if macro.is_macro(symbol):
         s, meta = macro.get_series(symbol)
         df = _series_to_ohlc(s, interval_label, period)
@@ -235,6 +336,10 @@ def lookup_names(symbols: list[str]) -> dict[str, str]:
     """Nombre legible de cada símbolo (catálogo macro o búsqueda exacta en Yahoo)."""
     out = {}
     for s in symbols:
+        expr = parse_expr(s)
+        if expr:
+            out[s] = f"{'Ratio' if expr[0] == '/' else 'Diferencial'}: {expr[1]} {'÷' if expr[0] == '/' else '−'} {expr[2]}"
+            continue
         if macro.is_macro(s):
             prefix, _, key = s.upper().partition(":")
             if prefix == "MACRO" and key in macro.CATALOG:
@@ -278,6 +383,25 @@ def search(query: str) -> list[dict]:
 def quotes(symbols: list[str]) -> dict[str, tuple[float, float]]:
     """Último precio y % de cambio diario para la lista de seguimiento."""
     out: dict[str, tuple[float, float]] = {}
+    exprs = {s: parse_expr(s) for s in symbols if parse_expr(s)}
+    if exprs:
+        # ratios/diferenciales: se calculan a partir del último precio y cambio de cada componente
+        plain = [s for s in symbols if s not in exprs]
+        parts = sorted(set(plain) | {x for _, a, b in exprs.values() for x in (a, b)})
+        base = quotes(parts)
+        for s, (op, a, b) in exprs.items():
+            if a not in base or b not in base:
+                continue
+            (la, ca), (lb, cb) = base[a], base[b]
+            pa = la / (1 + ca / 100) if np.isfinite(ca) else np.nan
+            pb = lb / (1 + cb / 100) if np.isfinite(cb) else np.nan
+            if op == "/":
+                last, prev = (la / lb if lb else np.nan), (pa / pb if pb else np.nan)
+            else:
+                last, prev = la - lb, pa - pb
+            out[s] = (last, (last / prev - 1) * 100 if prev and np.isfinite(prev) else np.nan)
+        out.update({s: base[s] for s in plain if s in base})
+        return out
     for s in [s for s in symbols if macro.is_macro(s)]:
         try:
             ser, _ = macro.get_series(s)

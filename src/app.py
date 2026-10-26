@@ -10,7 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import alerts, config, data, macro
 from .alerts_ui import AlertsWindow
 from .chart import CHART_TYPES, DOWN, UP, ChartWidget, fmt_change, fmt_price
-from .dialogs import IndicatorDialog, IndicatorEditDialog, SearchDialog
+from .dialogs import CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
 from .drawings import TOOL_GROUPS, TOOLS
 from .indicators import REGISTRY, by_category, compute
 from .searchbox import SymbolSearch
@@ -21,6 +21,8 @@ REFRESH_OPTIONS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("5 min", 300), ("
 # botones rápidos de intervalo (texto corto, intervalo); el resto está en la lista desplegable
 QUICK_INTERVALS = [("5m", "5 minutos"), ("15m", "15 minutos"), ("1h", "1 hora"), ("4h", "4 horas"),
                    ("D", "1 día"), ("S", "1 semana"), ("M", "1 mes")]
+# colores de las líneas de comparación (distintos de las velas y de los primeros indicadores)
+COMPARE_COLORS = ["#ff9800", "#e040fb", "#00bcd4", "#ffd600", "#76ff03", "#ec407a", "#90caf9"]
 # botones de rango bajo la gráfica
 RANGE_ORDER = ["1d", "5d", "1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "10y", "max"]
 RANGE_LABELS = {"1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M", "ytd": "YTD", "1y": "1A",
@@ -86,6 +88,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.symbol: str = ""
         self._req = 0
         self.period_key: str = self.cfg.get("period", "2y")
+        self.comparisons: list[str] = list(self.cfg.get("comparisons", []))
+        self._comp_closes: dict = {}  # símbolo -> cierres alineados a self.df
 
         self._build_actions()
         self._build_toolbar()
@@ -210,6 +214,14 @@ class MainWindow(QtWidgets.QMainWindow):
         menu.addAction("Quitar todos", self._clear_indicators)
         ind_btn.setMenu(menu)
         tb.addWidget(ind_btn)
+        self.compare_btn = QtWidgets.QToolButton()
+        self.compare_btn.setText("⇄ Comparar")
+        self.compare_btn.setToolTip("Comparar con otros símbolos en % de cambio")
+        self.compare_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self._compare_menu = QtWidgets.QMenu(self.compare_btn)
+        self._compare_menu.aboutToShow.connect(self._fill_compare_menu)
+        self.compare_btn.setMenu(self._compare_menu)
+        tb.addWidget(self.compare_btn)
         self.alert_btn = QtWidgets.QPushButton("🔔 Alertas")
         self.alert_btn.setToolTip("Alertas de precio e indicadores (Ctrl+Alt+A)")
         self.alert_btn.clicked.connect(self.open_alerts)
@@ -220,6 +232,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addWidget(spacer)
         tb.addAction(self.refresh_act)
         self._sync_interval_buttons(self.interval.currentText())
+        self._update_compare_button()
 
     def _build_rangebar(self):
         """Barra bajo la gráfica: cuánta historia ver (rango) y opciones de visualización."""
@@ -324,6 +337,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chart = ChartWidget()
         self.chart.hovered.connect(self.info.setText)
         self.chart.legendAction.connect(self._legend_action)
+        self.chart.compareRemoved.connect(self.remove_comparison)
         layer = self.chart.layer
         layer.changed.connect(self._save_drawings)
         layer.toolReset.connect(lambda: self._tool_actions["cursor"].setChecked(True) or self._on_tool("cursor"))
@@ -750,6 +764,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 out.setdefault(s, group)
         for key, (_path, name, *_rest) in macro.CATALOG.items():
             out[f"MACRO:{key}"] = name
+        out.update(data.COMMODITIES)  # «cobre», «oro», «petróleo»… también en español
         for s in macro.imported():
             out[s] = "Serie importada (CSV)"
         return out
@@ -787,7 +802,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def load(self, text, raw=False, keep_view=False, silent=False, by_name=False):
         """Carga un símbolo. ``by_name``: si no existe tal cual, se busca por nombre y se abre el primero."""
-        sym = text.strip().upper()
+        sym = " ".join(text.upper().split())  # «aapl / ^gspc» -> «AAPL / ^GSPC»
         if not sym:
             return
         same = sym == self.symbol
@@ -816,7 +831,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._set_period(used)
                 self.statusBar().showMessage(
                     f"Yahoo limita la historia para {interval}; se usó el periodo «{used}».", 8000)
-            self.redraw(keep_view=keep)
+            if self.comparisons:
+                self._load_comparisons(keep)  # dibuja cuando lleguen, sin parpadeo
+            else:
+                self._comp_closes = {}
+                self.redraw(keep_view=keep)
             self._save()
 
         def fail(err, req=req, sym=sym, silent=silent):
@@ -841,6 +860,77 @@ class MainWindow(QtWidgets.QMainWindow):
 
         run_task(data.load, sym, interval, period, on_done=done, on_fail=fail)
 
+    # ======================================================== comparar
+    def _fill_compare_menu(self):
+        m = self._compare_menu
+        m.clear()
+        m.addAction("➕  Agregar símbolo para comparar…", self.add_comparison)
+        if self.comparisons:
+            m.addSeparator()
+            for s in self.comparisons:
+                m.addAction(f"✕  Quitar {s}", lambda s=s: self.remove_comparison(s))
+            m.addSeparator()
+            m.addAction("Quitar todas las comparaciones", self.clear_comparisons)
+        m.addSeparator()
+        hint = m.addAction("Ratio o diferencial: escribe AAPL/^GSPC o A - B en el buscador")
+        hint.setEnabled(False)
+
+    def _update_compare_button(self):
+        n = len(self.comparisons)
+        self.compare_btn.setText(f"⇄ Comparar ({n})" if n else "⇄ Comparar")
+
+    def add_comparison(self, sym: str | None = None):
+        if not sym:
+            dlg = CompareDialog(self._known_symbols, self)
+            if dlg.exec() != QtWidgets.QDialog.Accepted or not dlg.symbol:
+                return
+            sym = dlg.symbol
+        sym = " ".join(sym.upper().split())
+        if sym == self.symbol or sym in self.comparisons:
+            self.statusBar().showMessage(f"{sym} ya está en la gráfica.", 5000)
+            return
+        self.comparisons.append(sym)
+        self._update_compare_button()
+        self._save()
+        if self.df is not None:
+            self._load_comparisons(keep=False)
+
+    def remove_comparison(self, sym: str):
+        if sym in self.comparisons:
+            self.comparisons.remove(sym)
+            self._comp_closes.pop(sym, None)
+            self._update_compare_button()
+            self._save()
+            self.redraw(keep_view=bool(self.comparisons))
+
+    def clear_comparisons(self):
+        self.comparisons.clear()
+        self._comp_closes = {}
+        self._update_compare_button()
+        self._save()
+        self.redraw()
+
+    def _load_comparisons(self, keep=False):
+        """Descarga los símbolos a comparar con el mismo intervalo y periodo, y luego dibuja todo junto."""
+        syms = [s for s in self.comparisons if s != self.symbol]
+        req, interval, period = self._req, self.interval.currentText(), self.period_key
+
+        def done(res, req=req):
+            if req != self._req:
+                return
+            self._comp_closes = {s: v for s, v in res.items() if not isinstance(v, str)}
+            self.redraw(keep_view=keep)
+            errs = [f"{s} ({v})" for s, v in res.items() if isinstance(v, str)]
+            if errs:
+                self.statusBar().showMessage("No se pudo comparar con " + "; ".join(errs), 12000)
+
+        if not syms:
+            done({})
+            return
+        self.statusBar().showMessage(f"Descargando {', '.join(syms)} para comparar…")
+        run_task(data.load_closes, syms, self.df.index, interval, period, on_done=done,
+                 on_fail=lambda e, req=req: done({}) if req == self._req else None)
+
     def redraw(self, keep_view=False):
         if self.df is None:
             return
@@ -858,8 +948,12 @@ class MainWindow(QtWidgets.QMainWindow):
         chart_type = self.ctype.currentText()
         if chart_type in ("Velas", "Heikin Ashi", "Barras OHLC") and (self.df["High"] == self.df["Low"]).all():
             chart_type = "Línea"  # series de un solo valor por fecha (M2, tasas sin agrupar…)
+        comps = [(s, self._comp_closes[s], COMPARE_COLORS[k % len(COMPARE_COLORS)])
+                 for k, s in enumerate(self.comparisons)
+                 if s in self._comp_closes and len(self._comp_closes[s]) == len(self.df)]
         self.chart.set_data(self.df, computed, chart_type, intraday=intraday,
-                            keep_view=keep_view, title=self.symbol, log=self.log_scale.isChecked())
+                            keep_view=keep_view, title=self.symbol, log=self.log_scale.isChecked(),
+                            comparisons=comps)
         self._update_alert_lines()
         self._update_header(intraday)
         msg = f"{self.symbol} · {len(self.df)} velas · {interval} · actualizado {dt.datetime.now():%H:%M:%S}"
@@ -885,7 +979,7 @@ class MainWindow(QtWidgets.QMainWindow):
         col = UP if chg >= 0 else DOWN
         self.header.setText(
             f"<b style='color:#ffffff'>{self.symbol}</b>&nbsp;&nbsp;<span style='color:#d1d4dc'>{name}</span>"
-            f"&nbsp;&nbsp;<span style='color:#787b86'>{exch} · {cur}</span>&nbsp;&nbsp;&nbsp;"
+            f"&nbsp;&nbsp;<span style='color:#787b86'>{' · '.join(x for x in (exch, cur) if x)}</span>&nbsp;&nbsp;&nbsp;"
             f"<b style='color:#ffffff; font-size:17px'>{fmt_price(last)}</b>&nbsp;"
             f"<span style='color:{col}'>{fmt_change(chg)} ({pct:+.2f}%)</span>")
         self.setWindowTitle(f"{self.symbol} {fmt_price(last)} — ChartView")
@@ -987,6 +1081,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "symbol": self.symbol or self.cfg.get("symbol"),
             "interval": self.interval.currentText(),
             "period": self.period_key,
+            "comparisons": self.comparisons,
             "chart_type": self.ctype.currentText(),
             "log_scale": self.log_scale.isChecked(),
             "auto_refresh": self.auto.isChecked(),

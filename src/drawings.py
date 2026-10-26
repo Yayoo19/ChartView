@@ -190,9 +190,13 @@ class DrawingLayer(QtCore.QObject):
         self.drawings = drawings
         self.render_all()
 
-    def set_context(self, main, panes, df, log):
-        """Se llama después de cada redibujado de la gráfica (los elementos anteriores ya no existen)."""
+    def set_context(self, main, panes, df, log, pct_base=None):
+        """Se llama después de cada redibujado de la gráfica (los elementos anteriores ya no existen).
+
+        ``pct_base``: en modo comparar, precio de la primera vela (la vista está en % de cambio).
+        """
         self.main, self.panes, self.df, self.log = main, panes, df, log
+        self.pct_base = pct_base
         self._ts = df.index.values.astype("datetime64[s]").astype(np.int64).astype(float)
         self._step = float(np.median(np.diff(self._ts))) if len(self._ts) > 1 else 86400.0
         self._items, self._owner, self._preview = {}, {}, None
@@ -222,11 +226,15 @@ class DrawingLayer(QtCore.QObject):
         return ts[i] + (x - i) * (ts[i + 1] - ts[i])
 
     def p2y(self, price):
+        if getattr(self, "pct_base", None):
+            return (price / self.pct_base - 1) * 100
         if not self.log:
             return price
         return float(np.log10(price)) if price > 0 else float("nan")
 
     def y2p(self, y):
+        if getattr(self, "pct_base", None):
+            return float(self.pct_base * (1 + y / 100))
         return float(10 ** y) if self.log else float(y)
 
     def to_view(self, pt):

@@ -27,7 +27,7 @@ class SymbolSearch(QtWidgets.QLineEdit):
 
     def __init__(self, local_symbols: Callable[[], dict[str, str]], parent=None):
         super().__init__(parent)
-        self.setPlaceholderText("Buscar: WALMEX, Apple, bitcoin, Nikkei, bono 10…")
+        self.setPlaceholderText("Buscar: WALMEX, Apple, bitcoin… · ratio AAPL/^GSPC · diferencial A - B")
         self.setClearButtonEnabled(True)
         self.setMinimumWidth(260)
         self.setToolTip("Escribe un símbolo o un nombre y elige una sugerencia (Ctrl+L)")
@@ -82,6 +82,10 @@ class SymbolSearch(QtWidgets.QLineEdit):
         if len(q) < 1:
             self._show([])
             return
+        if data.parse_expr(q):  # «AAPL/^GSPC», «GC=F/SI=F»: no hay nada que sugerir, se abre con Enter
+            self._timer.stop()
+            self._show([])
+            return
         self._local_rows = self._local_matches(q)
         self._show(self._local_rows)
         self._timer.start()
@@ -115,10 +119,10 @@ class SymbolSearch(QtWidgets.QLineEdit):
         sym, t = self._chosen
         if not text or (text == sym and time.monotonic() - t < 0.5):
             return  # ya se eligió desde la lista
-        up = text.upper()
+        up = " ".join(text.upper().split())  # normaliza espacios: «a  -  b» -> «A - B»
         if up in self._shown:
             choice, by_name = up, False
-        elif any(ch in up for ch in ".-^=:"):
+        elif data.parse_expr(up) or any(ch in up for ch in ".-^=:"):  # ratio/diferencial o símbolo completo
             choice, by_name = up, False
         elif self._shown and not self._timer.isActive():
             choice, by_name = self._shown[0], False  # la mejor sugerencia

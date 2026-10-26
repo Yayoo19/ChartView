@@ -173,6 +173,7 @@ class ValueAxis(pg.AxisItem):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self.log = False
+        self.percent = False  # modo comparar: los valores son % de cambio
 
     def tickValues(self, minVal, maxVal, size):
         if not self.log or not (np.isfinite(minVal) and np.isfinite(maxVal)) or maxVal <= minVal:
@@ -198,6 +199,8 @@ class ValueAxis(pg.AxisItem):
         return [(1.0, list(np.log10(ticks)))]
 
     def tickStrings(self, values, scale, spacing):
+        if self.percent:
+            return [f"{v:+.{0 if spacing >= 1 else 1}f}%" for v in values]
         if self.log:
             out = []
             for v in values:
@@ -210,11 +213,19 @@ class ValueAxis(pg.AxisItem):
 
 
 class _Entry:
-    def __init__(self, label: str, outs: list[tuple[Out, str]], index: int = -1, hidden: bool = False):
+    def __init__(self, label: str, outs: list[tuple[Out, str]], index: int = -1, hidden: bool = False,
+                 compare=None, color: str = FG, removable: bool = False):
         self.label = label
         self.outs = outs
-        self.index = index
+        self.index = index          # indicador: posición en la lista de indicadores activos
         self.hidden = hidden
+        self.compare = compare      # comparación: (% de cambio, precio) por vela
+        self.color = color
+        self.removable = removable  # comparación que se puede quitar desde la leyenda
+
+    @property
+    def interactive(self) -> bool:
+        return self.index >= 0 or self.removable
 
 
 class LegendItem(pg.TextItem):
@@ -245,7 +256,7 @@ class LegendItem(pg.TextItem):
 
     def hoverEvent(self, ev):
         row = None if ev.isExit() else self._row_at(ev.pos())
-        if row is not None and (row >= len(self.entries) or self.entries[row].index < 0):
+        if row is not None and (row >= len(self.entries) or not self.entries[row].interactive):
             row = None
         if row != self.hover_row:
             self.hover_row = row
@@ -255,7 +266,7 @@ class LegendItem(pg.TextItem):
 
     def mouseClickEvent(self, ev):
         row = self._row_at(ev.pos())
-        if row is None or row >= len(self.entries) or self.entries[row].index < 0:
+        if row is None or row >= len(self.entries) or not self.entries[row].interactive:
             ev.ignore()
             return
         entry = self.entries[row]
@@ -264,11 +275,14 @@ class LegendItem(pg.TextItem):
             self.chart.legend_menu(entry, ev.screenPos())
             return
         action = self._anchor_at(ev.pos())
-        if action:
-            ev.accept()
-            self.chart.legendAction.emit(action, entry.index)
-        else:
+        if not action:
             ev.ignore()
+            return
+        ev.accept()
+        if action == "rmcmp":
+            self.chart.compareRemoved.emit(entry.label)
+        else:
+            self.chart.legendAction.emit(action, entry.index)
 
 
 # --------------------------------------------------------------------------- #
@@ -277,6 +291,7 @@ class LegendItem(pg.TextItem):
 class ChartWidget(pg.GraphicsLayoutWidget):
     hovered = QtCore.Signal(str)
     legendAction = QtCore.Signal(str, int)  # ("cfg" | "hide" | "del", índice del indicador)
+    compareRemoved = QtCore.Signal(str)     # ✕ en una comparación de la leyenda
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -411,7 +426,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
     # --------------------------------------------------------------- render
     def set_data(self, df: pd.DataFrame, computed: list[Computed], chart_type: str = "Velas",
-                 intraday: bool = False, keep_view: bool = False, title: str = "", log: bool = False):
+                 intraday: bool = False, keep_view: bool = False, title: str = "", log: bool = False,
+                 comparisons: list | None = None):
+        """``comparisons``: [(símbolo, cierres alineados a df, color)]. Si hay alguna, la gráfica de
+        precio pasa a % de cambio desde la primera vela del periodo (la escala log se ignora)."""
         old = None
         if keep_view and self.plots and self.df is not None:
             old = (self.plots[0].getViewBox().viewRange()[0], len(self.df))
@@ -434,10 +452,19 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         idx = df.index
 
         main = self._new_plot(0, idx)
+        # Modo comparar: todo lo que va sobre el precio se expresa en % desde la primera vela.
         # Escala log: el precio principal se dibuja como log10(precio) y el eje
         # muestra los precios reales. Los paneles inferiores siguen lineales.
-        tf = _log10 if log else None
+        closes = df["Close"].to_numpy(float)
+        first = closes[np.isfinite(closes)]
+        pct_base = float(first[0]) if comparisons and first.size and first[0] else None
+        if pct_base:
+            log = False
+            tf = lambda y, b=pct_base: (np.asarray(y, dtype=float) / b - 1) * 100  # noqa: E731
+        else:
+            tf = _log10 if log else None
         main.getAxis("right").log = log
+        main.getAxis("right").percent = bool(pct_base)
         o, h, l, c = (df[k].to_numpy(float) for k in ("Open", "High", "Low", "Close"))
         if chart_type in ("Velas", "Heikin Ashi", "Barras OHLC"):
             if chart_type == "Heikin Ashi":
@@ -464,7 +491,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         lc = UP if last >= prev else DOWN
         last_line = pg.InfiniteLine(
             pos=float(tf(last)) if tf else last, angle=0, movable=False, pen=pg.mkPen(lc, width=1, style=QtCore.Qt.DotLine),
-            label=fmt_price(last), labelOpts={"position": 0.985, "color": "#ffffff", "fill": lc, "anchors": [(1, 1), (1, 1)]})
+            label=f"{fmt_price(last)}  ({(last / pct_base - 1) * 100:+.2f}%)" if pct_base else fmt_price(last),
+            labelOpts={"position": 0.985, "color": "#ffffff", "fill": lc, "anchors": [(1, 1), (1, 1)]})
         main.addItem(last_line, ignoreBounds=True)
 
         if title:
@@ -487,6 +515,21 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for cp in overlays:
             self._draw_computed(main, cp, x, pal, tf)
             max_off = max([max_off] + [o.offset for o in cp.outs])
+
+        if pct_base:
+            main.addItem(pg.InfiniteLine(pos=0, angle=0, movable=False,
+                                         pen=pg.mkPen("#787b86", width=1, style=QtCore.Qt.DashLine)), ignoreBounds=True)
+            rows = [_Entry(title or "Precio", [], compare=(tf(closes), closes), color="#d1d4dc")]
+            for sym, arr, color in comparisons:
+                arr = np.asarray(arr, dtype=float)
+                fin = arr[np.isfinite(arr)]
+                if not fin.size or not fin[0]:
+                    continue
+                pct = (arr / fin[0] - 1) * 100  # cada símbolo arranca en 0 % en su primer dato del periodo
+                main.addItem(pg.PlotDataItem(x, pct, pen=pg.mkPen(color, width=1.8), connect="finite"))
+                self._reg(main, x, pct)
+                rows.append(_Entry(sym, [], compare=(pct, arr), color=color, removable=True))
+            self._entries[main][:0] = rows  # las comparaciones van arriba de los indicadores
 
         for k, cp in enumerate(panes, start=1):
             p = self._new_plot(k, idx)
@@ -517,10 +560,12 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             (x0, x1), old_n = old
             shift = (n - old_n) if x1 >= old_n - 3 else 0
             main.setXRange(x0 + shift, x1 + shift, padding=0)
+        elif pct_base:
+            self.fit_all()  # comparando se ve todo el periodo: las líneas arrancan en 0 % a la izquierda
         else:
             self.show_last(self.default_bars)
         self._on_xrange()
-        self.layer.set_context(main, self.plots[1:], df, log)
+        self.layer.set_context(main, self.plots[1:], df, log, pct_base)
         self._update_labels(n - 1)
 
     def set_alert_lines(self, levels: list[tuple[float, str]]):
@@ -623,6 +668,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
     def legend_menu(self, entry: _Entry, screen_pos):
         m = QtWidgets.QMenu(self)
+        if entry.removable:
+            m.addAction(f"✕  Quitar comparación con {entry.label}", lambda: self.compareRemoved.emit(entry.label))
+            m.exec(QtCore.QPoint(int(screen_pos.x()), int(screen_pos.y())))
+            return
         m.addAction("⚙  Configurar…", lambda: self.legendAction.emit("cfg", entry.index))
         m.addAction("◉  Mostrar" if entry.hidden else "👁  Ocultar", lambda: self.legendAction.emit("hide", entry.index))
         m.addSeparator()
@@ -640,6 +689,17 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             legend.entries = entries
             lines = []
             for row, e in enumerate(entries):
+                if e.compare is not None:
+                    pct, raw = e.compare
+                    pv = pct[i] if 0 <= i < len(pct) else np.nan
+                    rv = raw[i] if 0 <= i < len(raw) else np.nan
+                    pv_txt = f"{pv:+.2f}%" if np.isfinite(pv) else "—"
+                    text = (f"<span style='color:{e.color}'>{e.label}&nbsp; {pv_txt}</span>"
+                            f"&nbsp; <span style='color:#787b86'>{fmt_price(rv)}</span>")
+                    if row == legend.hover_row and e.removable:
+                        text += f"&nbsp;&nbsp; <a href='rmcmp' style='{icon}'>✕</a>"
+                    lines.append(f"<div>{text}</div>")
+                    continue
                 if e.hidden:
                     text = f"<span style='color:#5d606b'>{e.label}&nbsp; oculto</span>"
                 else:
