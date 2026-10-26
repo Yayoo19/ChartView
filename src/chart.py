@@ -12,6 +12,9 @@ from .indicators import DOWN, UP, Computed, Out
 BG = "#131722"
 FG = "#b2b5be"
 AXIS = "#2a2e39"
+# pyqtgraph pinta la cuadrícula con el color del eje y la opacidad elegida; con AXIS (casi igual
+# al fondo) no se distinguiría, así que los ejes usan un gris más claro
+GRID = "#787b86"
 CROSS = "#9598a1"
 PALETTE = ["#2962ff", "#ff6d00", "#e040fb", "#00bcd4", "#ffd600", "#ec407a", "#76ff03", "#8d6e63", "#90caf9"]
 CHART_TYPES = ["Velas", "Heikin Ashi", "Barras OHLC", "Línea", "Área"]
@@ -307,6 +310,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._fixed: set = set()
         self._intraday = False
         self.default_bars = 150
+        self.grid_alpha = 0.22  # opacidad de la cuadrícula del fondo (0 = sin cuadrícula)
         self.scene().sigMouseMoved.connect(self._on_mouse)
         self.layer = DrawingLayer(self)
 
@@ -319,12 +323,12 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         p.showAxis("right")
         p.hideAxis("left")
         p.getAxis("right").setWidth(80)
-        p.showGrid(x=True, y=True, alpha=0.12)
+        self._apply_grid(p)
         p.setMenuEnabled(False)
         p.hideButtons()
         for name in ("right", "bottom"):
             ax = p.getAxis(name)
-            ax.setPen(pg.mkPen(AXIS))
+            ax.setPen(pg.mkPen(GRID))
             ax.setTextPen(pg.mkPen(FG))
         vb = p.getViewBox()
         vb.setMouseEnabled(x=True, y=False)
@@ -347,6 +351,16 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._entries[p] = []
         self.plots.append(p)
         return p
+
+    def _apply_grid(self, plot):
+        on = self.grid_alpha > 0
+        plot.showGrid(x=on, y=on, alpha=self.grid_alpha if on else None)
+
+    def set_grid(self, alpha: float):
+        """Cambia la cuadrícula de todos los paneles sin redibujar la gráfica."""
+        self.grid_alpha = alpha
+        for p in self.plots:
+            self._apply_grid(p)
 
     def _reg(self, plot, xs, ys):
         self._series[plot].append((np.asarray(xs, float), np.asarray(ys, float)))
@@ -551,7 +565,11 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for k in range(1, len(panes) + 1):
             lay.setRowStretchFactor(k, 1)
         for p in self.plots[:-1]:
-            p.hideAxis("bottom")
+            # solo el último panel muestra las fechas; en los demás el eje queda activo pero sin
+            # texto ni altura, porque un eje oculto no dibuja las líneas verticales de la cuadrícula
+            ax = p.getAxis("bottom")
+            ax.setStyle(showValues=False, tickLength=0)
+            ax.setHeight(0)
         for p in self.plots:
             p.getViewBox().setLimits(xMin=-50, xMax=n + max_off + 80, minXRange=8)
 

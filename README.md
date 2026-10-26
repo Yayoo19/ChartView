@@ -51,7 +51,8 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 - **Barra superior:** buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Alertas y ⟳ (actualizar).
 - **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
-- **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
+- **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
+- **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
 ### Datos macro
 

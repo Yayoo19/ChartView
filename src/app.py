@@ -27,12 +27,14 @@ COMPARE_COLORS = ["#ff9800", "#e040fb", "#00bcd4", "#ffd600", "#76ff03", "#ec407
 RANGE_ORDER = ["1d", "5d", "1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "10y", "max"]
 RANGE_LABELS = {"1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M", "ytd": "YTD", "1y": "1A",
                 "2y": "2A", "5y": "5A", "10y": "10A", "max": "Todo"}
+# cuadrícula del fondo: (nombre, opacidad de las líneas)
+GRID_LEVELS = [("Sin cuadrícula", 0.0), ("Suave", 0.12), ("Media", 0.22), ("Fuerte", 0.4)]
 SHORTCUTS = [
     ("Ctrl+L", "Ir al buscador de símbolos"), ("Ctrl+F", "Búsqueda avanzada"), ("F5", "Actualizar datos"),
     ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"), ("Ctrl+D", "Mostrar u ocultar herramientas de dibujo"),
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
     ("Ctrl+Z", "Deshacer último dibujo"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
-    ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
+    ("Ctrl+G", "Encender o apagar la cuadrícula"), ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
 ]
 
 
@@ -301,6 +303,18 @@ class MainWindow(QtWidgets.QMainWindow):
         full = v.addAction("Pantalla completa", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen(),
                            QtGui.QKeySequence("F11"))
         full.setToolTip("Pantalla completa (F11)")
+        grid_menu = v.addMenu("Cuadrícula")
+        grid_group = QtGui.QActionGroup(grid_menu)
+        self._grid_actions = {}
+        current = self.cfg.get("grid", "Media")
+        for name, _alpha in GRID_LEVELS:
+            act = grid_menu.addAction(name, lambda n=name: self._set_grid_level(n))
+            act.setCheckable(True)
+            act.setChecked(name == current)
+            grid_group.addAction(act)
+            self._grid_actions[name] = act
+        grid_menu.addSeparator()
+        grid_menu.addAction("Encender / apagar", self._toggle_grid, QtGui.QKeySequence("Ctrl+G"))
 
         t = mb.addMenu("&Herramientas")
         t.addAction("Indicadores…", self.open_indicators, QtGui.QKeySequence("Ctrl+I"))
@@ -311,6 +325,18 @@ class MainWindow(QtWidgets.QMainWindow):
         a = mb.addMenu("A&yuda")
         a.addAction("Atajos de teclado", self.show_shortcuts, QtGui.QKeySequence("F1"))
         a.addAction("Acerca de ChartView", self.show_about)
+
+    def _set_grid_level(self, name: str):
+        self.chart.set_grid(dict(GRID_LEVELS)[name])
+        self._grid_actions[name].setChecked(True)
+        if name != "Sin cuadrícula":
+            self.cfg["grid_last_on"] = name  # para que Ctrl+G vuelva al último nivel encendido
+        self.cfg["grid"] = name
+        self._save()
+
+    def _toggle_grid(self):
+        on = self.cfg.get("grid", "Media") != "Sin cuadrícula"
+        self._set_grid_level("Sin cuadrícula" if on else self.cfg.get("grid_last_on", "Media"))
 
     def show_shortcuts(self):
         rows = "".join(f"<tr><td style='padding:3px 16px 3px 0'><b>{k}</b></td><td>{d}</td></tr>" for k, d in SHORTCUTS)
@@ -335,6 +361,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.info.setTextFormat(QtCore.Qt.RichText)
         self.info.setStyleSheet("font-size:12px; padding:0 2px 4px 2px;")
         self.chart = ChartWidget()
+        self.chart.grid_alpha = dict(GRID_LEVELS).get(self.cfg.get("grid", "Media"), 0.22)
         self.chart.hovered.connect(self.info.setText)
         self.chart.legendAction.connect(self._legend_action)
         self.chart.compareRemoved.connect(self.remove_comparison)
