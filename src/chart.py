@@ -97,10 +97,16 @@ class CandleItem(pg.GraphicsObject):
             xi = float(x[i])
             up = ci >= oi
             p.setPen(pens[up])
-            p.drawLine(QPF(xi, li), QPF(xi, hi))
+            # Qt fusiona en un bloque gigante los rectángulos y líneas de tamaño cero
+            # seguidos dentro de un QPicture (p. ej. meses sin cotización, O=H=L=C):
+            # las mechas nulas no se dibujan y los cuerpos nulos van como línea.
+            if hi != li:
+                p.drawLine(QPF(xi, li), QPF(xi, hi))
             if bars:
                 p.drawLine(QPF(xi - w, oi), QPF(xi, oi))
                 p.drawLine(QPF(xi, ci), QPF(xi + w, ci))
+            elif ci == oi:
+                p.drawLine(QPF(xi - w, oi), QPF(xi + w, oi))
             else:
                 p.setBrush(brushes[up])
                 p.drawRect(QtCore.QRectF(xi - w, oi, 2 * w, ci - oi))
@@ -304,7 +310,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             plot.addItem(pg.ScatterPlotItem(x=xs[m], y=y[m], size=4, pen=None, brush=pg.mkBrush(color)))
             self._reg(plot, xs[m], y[m])
         elif out.kind == "hist":
-            m = np.isfinite(y)
+            m = np.isfinite(y) & (y != 0)  # barras de altura cero: mismo problema de Qt que las velas
             up = out.mask if out.mask is not None else (y >= 0)
             c_up = out.color or "#26a69aa0"
             c_dn = out.color2 or "#ef5350a0"
