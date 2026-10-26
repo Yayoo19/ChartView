@@ -33,6 +33,15 @@ TOOLS = [
     ("fib", "Fib", "Retroceso de Fibonacci (arrastrar de inicio a fin)"),
     ("eraser", "⌫", "Borrador: clic sobre un dibujo"),
 ]
+# grupos de la barra de dibujo: un botón por grupo; la flechita abre las demás herramientas del grupo
+TOOL_GROUPS = [
+    ("Cursor", ["cursor"]),
+    ("Líneas", ["hline", "vline", "trend", "ray"]),
+    ("Formas", ["rect", "ellipse", "pen"]),
+    ("Texto e imagen", ["text", "image"]),
+    ("Fibonacci", ["fib"]),
+    ("Borrador", ["eraser"]),
+]
 DRAG_TOOLS = {"trend", "ray", "rect", "ellipse", "pen", "fib", "image"}
 STICKY_TOOLS = {"pen", "eraser"}  # siguen activas después de usarlas
 

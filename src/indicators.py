@@ -119,6 +119,8 @@ class Computed:
     label: str
     outs: list
     color: str | None = None
+    index: int = -1        # posición en la lista de indicadores activos (para editarlo desde la leyenda)
+    hidden: bool = False   # oculto: no se dibuja, pero sigue en la leyenda
 
 
 REGISTRY: dict[str, IndicatorDef] = {}

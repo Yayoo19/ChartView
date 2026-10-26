@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .drawings import DrawingLayer, DrawViewBox
 from .indicators import DOWN, UP, Computed, Out
@@ -210,9 +210,65 @@ class ValueAxis(pg.AxisItem):
 
 
 class _Entry:
-    def __init__(self, label: str, outs: list[tuple[Out, str]]):
+    def __init__(self, label: str, outs: list[tuple[Out, str]], index: int = -1, hidden: bool = False):
         self.label = label
         self.outs = outs
+        self.index = index
+        self.hidden = hidden
+
+
+class LegendItem(pg.TextItem):
+    """Leyenda de un panel. Cada indicador es un renglón; al pasar el mouse aparecen
+    ⚙ configurar · 👁 ocultar/mostrar · ✕ quitar, y con clic derecho, un menú."""
+
+    def __init__(self, chart: "ChartWidget"):
+        super().__init__(anchor=(0, 0))
+        self.chart = chart
+        self.entries: list[_Entry] = []
+        self.hover_row: int | None = None
+        f = QtGui.QFont()
+        f.setPointSize(9)
+        self.setFont(f)
+        self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(QtCore.Qt.LeftButton | QtCore.Qt.RightButton)
+
+    def _doc_point(self, pos):
+        return self.textItem.mapFromParent(pos)
+
+    def _row_at(self, pos):
+        doc = self.textItem.document()
+        c = doc.documentLayout().hitTest(self._doc_point(pos), QtCore.Qt.FuzzyHit)
+        return None if c < 0 else doc.findBlock(c).blockNumber()
+
+    def _anchor_at(self, pos) -> str:
+        return self.textItem.document().documentLayout().anchorAt(self._doc_point(pos))
+
+    def hoverEvent(self, ev):
+        row = None if ev.isExit() else self._row_at(ev.pos())
+        if row is not None and (row >= len(self.entries) or self.entries[row].index < 0):
+            row = None
+        if row != self.hover_row:
+            self.hover_row = row
+            self.chart.refresh_labels()
+        on_icon = not ev.isExit() and bool(self._anchor_at(ev.pos()))
+        self.setCursor(QtCore.Qt.PointingHandCursor if on_icon else QtCore.Qt.ArrowCursor)
+
+    def mouseClickEvent(self, ev):
+        row = self._row_at(ev.pos())
+        if row is None or row >= len(self.entries) or self.entries[row].index < 0:
+            ev.ignore()
+            return
+        entry = self.entries[row]
+        if ev.button() == QtCore.Qt.RightButton:
+            ev.accept()
+            self.chart.legend_menu(entry, ev.screenPos())
+            return
+        action = self._anchor_at(ev.pos())
+        if action:
+            ev.accept()
+            self.chart.legendAction.emit(action, entry.index)
+        else:
+            ev.ignore()
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +276,7 @@ class _Entry:
 # --------------------------------------------------------------------------- #
 class ChartWidget(pg.GraphicsLayoutWidget):
     hovered = QtCore.Signal(str)
+    legendAction = QtCore.Signal(str, int)  # ("cfg" | "hide" | "del", índice del indicador)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -266,7 +323,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         h.setZValue(100)
         h.hide()
         self._cross[p] = (v, h)
-        lbl = pg.TextItem(anchor=(0, 0))
+        lbl = LegendItem(self)
         lbl.setParentItem(vb)
         lbl.setPos(6, 2)
         lbl.setZValue(200)
@@ -338,6 +395,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
     def _draw_computed(self, plot, comp: Computed, x, palette_iter, tf=None):
         outs = []
+        if comp.hidden:  # oculto: no se dibuja, pero queda en la leyenda para volver a mostrarlo
+            self._entries[plot].append(_Entry(comp.label, [], comp.index, True))
+            return
         for o in comp.outs:
             color = o.color
             if color is None and o.kind in ("line", "dots"):
@@ -347,7 +407,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self._draw_out(plot, o, x, color, tf)
             if o.show_value:
                 outs.append((o, color if len(color) <= 7 else color[:7]))
-        self._entries[plot].append(_Entry(comp.label, outs))
+        self._entries[plot].append(_Entry(comp.label, outs, comp.index))
 
     # --------------------------------------------------------------- render
     def set_data(self, df: pd.DataFrame, computed: list[Computed], chart_type: str = "Velas",
@@ -557,20 +617,44 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if self.df is not None and len(self.df):
             self._update_labels(len(self.df) - 1)
 
+    def refresh_labels(self):
+        if self.df is not None and len(self.df):
+            self._update_labels(getattr(self, "_last_i", len(self.df) - 1))
+
+    def legend_menu(self, entry: _Entry, screen_pos):
+        m = QtWidgets.QMenu(self)
+        m.addAction("⚙  Configurar…", lambda: self.legendAction.emit("cfg", entry.index))
+        m.addAction("◉  Mostrar" if entry.hidden else "👁  Ocultar", lambda: self.legendAction.emit("hide", entry.index))
+        m.addSeparator()
+        m.addAction("✕  Quitar", lambda: self.legendAction.emit("del", entry.index))
+        m.exec(QtCore.QPoint(int(screen_pos.x()), int(screen_pos.y())))
+
     def _update_labels(self, i: int):
         df = self.df
         n = len(df)
         ic = min(max(i, 0), n - 1)
+        self._last_i = i
+        icon = "color:#b2b5be; text-decoration:none"
         for p, entries in self._entries.items():
+            legend = self._labels[p]
+            legend.entries = entries
             lines = []
-            for e in entries:
-                vals = []
-                for o, color in e.outs:
-                    j = i - o.offset
-                    v = o.y[j] if 0 <= j < len(o.y) else np.nan
-                    vals.append(f"<span style='color:{color}'>{fmt_value(v)}</span>")
-                lines.append(f"<span style='color:{FG}'>{e.label}</span>&nbsp; " + "&nbsp; ".join(vals))
-            self._labels[p].setHtml("<div style='font-size:9pt; font-family:Segoe UI'>" + "<br>".join(lines) + "</div>")
+            for row, e in enumerate(entries):
+                if e.hidden:
+                    text = f"<span style='color:#5d606b'>{e.label}&nbsp; oculto</span>"
+                else:
+                    vals = []
+                    for o, color in e.outs:
+                        j = i - o.offset
+                        v = o.y[j] if 0 <= j < len(o.y) else np.nan
+                        vals.append(f"<span style='color:{color}'>{fmt_value(v)}</span>")
+                    text = f"<span style='color:{FG}'>{e.label}</span>&nbsp; " + "&nbsp; ".join(vals)
+                if row == legend.hover_row:
+                    text += (f"&nbsp;&nbsp; <a href='cfg' style='{icon}'>⚙</a>&nbsp; "
+                             f"<a href='hide' style='{icon}'>{'◉' if e.hidden else '👁'}</a>&nbsp; "
+                             f"<a href='del' style='{icon}'>✕</a>")
+                lines.append(f"<div>{text}</div>")  # un bloque por renglón: así se sabe qué indicador se tocó
+            legend.setHtml("".join(lines))
 
         r = df.iloc[ic]
         prev = df["Close"].iloc[ic - 1] if ic > 0 else r["Open"]

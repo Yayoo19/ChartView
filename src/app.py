@@ -10,8 +10,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import alerts, config, data, macro
 from .alerts_ui import AlertsWindow
 from .chart import CHART_TYPES, DOWN, UP, ChartWidget, fmt_change, fmt_price
-from .dialogs import IndicatorDialog, SearchDialog
-from .drawings import TOOLS
+from .dialogs import IndicatorDialog, IndicatorEditDialog, SearchDialog
+from .drawings import TOOL_GROUPS, TOOLS
 from .indicators import REGISTRY, by_category, compute
 from .searchbox import SymbolSearch
 from .workers import run_task
@@ -32,6 +32,45 @@ SHORTCUTS = [
     ("Ctrl+Z", "Deshacer último dibujo"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
     ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
 ]
+
+
+NAME_ROLE = QtCore.Qt.UserRole + 1
+
+
+class WatchDelegate(QtWidgets.QStyledItemDelegate):
+    """Columna de símbolo de la lista: ticker arriba y nombre de la empresa abajo, en gris."""
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        if index.data(NAME_ROLE):
+            size.setHeight(max(size.height(), 34))
+        return size
+
+    def paint(self, painter, option, index):
+        name = index.data(NAME_ROLE)
+        if index.column() != 0 or not name:
+            return super().paint(painter, option, index)
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
+        style.drawControl(QtWidgets.QStyle.CE_ItemViewItem, opt, painter, opt.widget)  # fondo y selección
+        r = QtCore.QRectF(style.subElementRect(QtWidgets.QStyle.SE_ItemViewItemText, opt, opt.widget))
+        half = r.height() / 2
+        painter.save()
+        selected = bool(opt.state & QtWidgets.QStyle.State_Selected)
+        painter.setPen(opt.palette.color(QtGui.QPalette.HighlightedText if selected else QtGui.QPalette.Text))
+        painter.setFont(opt.font)
+        painter.drawText(QtCore.QRectF(r.x() + 2, r.y() + 1, r.width(), half),
+                         QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, text)
+        small = QtGui.QFont(opt.font)
+        small.setPointSizeF(max(7.0, opt.font.pointSizeF() - 1.5))
+        painter.setFont(small)
+        painter.setPen(QtGui.QColor("#d1d4dc" if selected else "#787b86"))
+        elided = QtGui.QFontMetrics(small).elidedText(name, QtCore.Qt.ElideRight, int(r.width()) - 2)
+        painter.drawText(QtCore.QRectF(r.x() + 2, r.y() + half - 2, r.width(), half),
+                         QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, elided)
+        painter.restore()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -278,6 +317,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.info.setStyleSheet("font-size:12px; padding:0 2px 4px 2px;")
         self.chart = ChartWidget()
         self.chart.hovered.connect(self.info.setText)
+        self.chart.legendAction.connect(self._legend_action)
         layer = self.chart.layer
         layer.changed.connect(self._save_drawings)
         layer.toolReset.connect(lambda: self._tool_actions["cursor"].setChecked(True) or self._on_tool("cursor"))
@@ -300,19 +340,42 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.setStyleSheet("QToolBar{background:#1e222d;border:1px solid #2a2e39;border-radius:4px;padding:2px;}"
                           "QToolButton{min-width:30px;min-height:26px;font-size:15px;border:none;padding:2px;}"
                           "QToolButton:checked{background:#2962ff;border-radius:4px;}"
-                          "QToolButton:hover{background:#2a2e39;}")
+                          "QToolButton:hover{background:#2a2e39;}"
+                          "QToolButton[popupMode=\"1\"]{padding-right:9px;}"
+                          "QToolButton::menu-button{border:none;width:9px;}"
+                          "QToolButton::menu-arrow{width:6px;height:6px;}")
         group = QtGui.QActionGroup(bar)
         group.setExclusive(True)
         self._tool_actions = {}
-        for key, text, tip in TOOLS:
-            act = bar.addAction(text)
-            act.setToolTip(tip)
-            act.setCheckable(True)
-            act.triggered.connect(lambda _c, k=key: self._on_tool(k))
-            group.addAction(act)
-            self._tool_actions[key] = act
-            if key == "cursor":
-                act.setChecked(True)
+        info = {k: (glyph, tip) for k, glyph, tip in TOOLS}
+        for title, keys in TOOL_GROUPS:
+            acts = []
+            for key in keys:
+                glyph, tip = info[key]
+                name = tip.split(" (")[0].split(":")[0]  # «Línea horizontal (clic)» -> «Línea horizontal»
+                act = QtGui.QAction(f"{glyph}    {name}", bar)  # así se lee en el menú del grupo
+                act.setIconText(glyph)                          # y así en el botón
+                act.setToolTip(tip)
+                act.setCheckable(True)
+                act.triggered.connect(lambda _c, k=key: self._on_tool(k))
+                group.addAction(act)
+                self._tool_actions[key] = act
+                acts.append(act)
+            if len(acts) == 1:
+                bar.addAction(acts[0])
+                continue
+            btn = QtWidgets.QToolButton()
+            btn.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup)
+            btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
+            menu = QtWidgets.QMenu(title, btn)
+            for act in acts:
+                menu.addAction(act)
+                # el botón del grupo recuerda la última herramienta elegida
+                act.triggered.connect(lambda _c, b=btn, a=act: b.setDefaultAction(a))
+            btn.setMenu(menu)
+            btn.setDefaultAction(acts[0])
+            bar.addWidget(btn)
+        self._tool_actions["cursor"].setChecked(True)
         bar.addSeparator()
         self.color_btn = QtWidgets.QToolButton()
         self.color_btn.setText("■")
@@ -413,6 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        self.watch.setItemDelegateForColumn(0, WatchDelegate(self.watch))
         self.watch.itemActivated.connect(self._on_watch)
         self.watch.itemClicked.connect(self._on_watch)
         self.watch.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
@@ -526,12 +590,49 @@ class MainWindow(QtWidgets.QMainWindow):
             for s in syms:
                 it = QtWidgets.QTreeWidgetItem([s, "", ""])
                 it.setData(0, QtCore.Qt.UserRole, s)
-                it.setTextAlignment(1, QtCore.Qt.AlignRight)
-                it.setTextAlignment(2, QtCore.Qt.AlignRight)
+                it.setTextAlignment(1, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                it.setTextAlignment(2, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 top.addChild(it)
                 self._watch_items.setdefault(s, []).append(it)
             self.watch.addTopLevelItem(top)
         self.watch.expandAll()
+        self._apply_names()
+        self._fetch_names()
+
+    def _apply_names(self):
+        names = self.cfg.setdefault("names", {})
+        for s, items in self._watch_items.items():
+            name = names.get(s, "")
+            for it in items:
+                it.setData(0, NAME_ROLE, name)
+                it.setToolTip(0, f"{s} — {name}" if name else s)
+
+    def _fetch_names(self):
+        """Busca en segundo plano los nombres que faltan; quedan en caché (cfg["names"])."""
+        names = self.cfg.setdefault("names", {})
+        missing = [s for s in self._watch_items if s not in names]
+        if not missing or getattr(self, "_names_busy", False):
+            return
+        self._names_busy = True
+
+        def done(found, missing=missing):
+            self._names_busy = False
+            for s in missing:
+                names[s] = found.get(s, "")  # vacío = no se encontró; no se vuelve a buscar
+            self._apply_names()
+            self._save()
+            self._fetch_names()  # por si mientras tanto se agregaron símbolos
+
+        run_task(data.lookup_names, missing, on_done=done,
+                 on_fail=lambda e: setattr(self, "_names_busy", False))
+
+    def _remember_name(self, sym: str, meta: dict):
+        """Al abrir un símbolo, Yahoo da su nombre: se guarda para la lista."""
+        name = data.short_name(meta.get("longName") or meta.get("shortName") or "")
+        names = self.cfg.setdefault("names", {})
+        if name and not names.get(sym):
+            names[sym] = name
+            self._apply_names()
 
     def _on_watch(self, item, _col=0):
         s = item.data(0, QtCore.Qt.UserRole)
@@ -545,6 +646,8 @@ class MainWindow(QtWidgets.QMainWindow):
         s = it.data(0, QtCore.Qt.UserRole)
         m = QtWidgets.QMenu(self)
         m.addAction("Abrir", lambda: self._on_watch(it))
+        last = getattr(self, "_quotes", {}).get(s, (0.0,))[0] or 0.0
+        m.addAction("🔔 Crear alerta…", lambda: self.open_alerts(alerts.new_alert(s, "price_cross_up", last)))
         others = [n for n in self.cfg["watchlists"] if n != self.wl_combo.currentText()]
         if others:
             sub = m.addMenu("Copiar a lista")
@@ -585,8 +688,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self._remove_item(it)
 
     def refresh_quotes(self):
+        if getattr(self, "_quotes_busy", False):  # con Auto cada 15 s no se encimen las descargas
+            return
         syms = sorted({s for lst in self._wl().values() for s in lst})
-        run_task(data.quotes, syms, on_done=self._show_quotes)
+        if not syms:
+            return
+        self._quotes_busy = True
+
+        def done(q):
+            self._quotes_busy = False
+            self._show_quotes(q)
+
+        run_task(data.quotes, syms, on_done=done, on_fail=lambda e: setattr(self, "_quotes_busy", False))
 
     def _show_quotes(self, q):
         """Pinta precios; se guardan en caché para mostrarlos al cambiar de lista."""
@@ -672,6 +785,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             df, meta, used = res
             self.df, self.meta, self.symbol = df, meta, sym
+            self._remember_name(sym, meta)
+            if not silent and sym in getattr(self, "_watch_items", {}):
+                # el renglón de la lista muestra el mismo precio que la gráfica recién cargada
+                run_task(data.quotes, [sym], on_done=self._show_quotes)
             if used != period:
                 self._set_period(used)
                 self.statusBar().showMessage(
@@ -705,9 +822,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.df is None:
             return
         computed, errors = [], []
-        for a in self.indicators:
+        for i, a in enumerate(self.indicators):
             try:
-                computed.append(compute(a["key"], a.get("params"), self.df, a.get("color")))
+                c = compute(a["key"], a.get("params"), self.df, a.get("color"))
+                c.index, c.hidden = i, bool(a.get("hidden"))
+                computed.append(c)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{REGISTRY[a['key']].abbr}: {e}")
         interval = self.interval.currentText()
@@ -755,6 +874,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self.indicators = dlg.active
             self.redraw(keep_view=True)
             self._save()
+
+    def _legend_action(self, action: str, index: int):
+        """Clic en ⚙ / 👁 / ✕ (o su menú) en la leyenda de la gráfica."""
+        if not 0 <= index < len(self.indicators):
+            return
+        a = self.indicators[index]
+        if action == "cfg":
+            dlg = IndicatorEditDialog(a, self)
+            if dlg.exec() != QtWidgets.QDialog.Accepted:
+                return
+            self.indicators[index] = dlg.instance
+        elif action == "hide":
+            a["hidden"] = not a.get("hidden")
+        elif action == "del":
+            del self.indicators[index]
+        self.redraw(keep_view=True)
+        self._save()
 
     def add_indicator(self, key):
         self.indicators.append({"key": key, "params": {}, "color": None})
@@ -811,10 +947,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Imagen guardada en {path}", 6000)
 
     def _apply_auto_refresh(self, *_):
+        # la gráfica y los precios de la lista se actualizan al ritmo elegido en Auto;
+        # sin Auto, la lista se refresca cada 5 minutos
         if self.auto.isChecked():
-            self.timer.start(int(self.auto_every.currentData()) * 1000)
+            secs = int(self.auto_every.currentData())
+            self.timer.start(secs * 1000)
+            self.quote_timer.start(secs * 1000)
+            self.refresh_quotes()
         else:
             self.timer.stop()
+            self.quote_timer.start(5 * 60 * 1000)
         self._save()
 
     def _save(self):

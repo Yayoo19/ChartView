@@ -58,13 +58,14 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 - Rueda del mouse: zoom en el tiempo · arrastrar: desplazar · el eje Y se ajusta solo.
 - **Indicadores** (Ctrl+I): catálogo por categorías, parámetros editables, color y orden. La flecha del botón agrega un indicador directo con valores por defecto.
+- **Leyenda de la gráfica:** al pasar el mouse sobre un indicador (por ejemplo "EMA 20") aparecen ⚙ configurar, 👁 ocultar/mostrar y ✕ quitar; con clic derecho, el mismo menú. Los ocultos quedan en gris para volver a mostrarlos.
 - Tipos de gráfica: velas, Heikin Ashi, barras OHLC, línea y área.
 - **Log** (abajo de la gráfica o Alt+L): escala logarítmica en la gráfica de precio, incluidos los indicadores dibujados sobre ella.
 - Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora, y las de 2 semanas con velas semanales (siempre empiezan en lunes). Las de 3, 6 y 12 meses se arman con velas mensuales, alineadas a trimestres, semestres y años del calendario.
 - El panel de listas se puede cerrar con la ✕ o arrastrar a otro lado. Se vuelve a abrir con **☰ Listas** (primer botón de la barra) o Ctrl+B. La app recuerda dónde lo dejaste.
-- Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas, y con clic derecho copias un símbolo a otra lista.
+- Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas. Cada símbolo muestra debajo el nombre de la empresa o serie. Con clic derecho copias un símbolo a otra lista o creas una alerta.
 - **Dibujo** (barra vertical a la izquierda de la gráfica):
-  - Herramientas: línea horizontal, línea vertical, línea de tendencia, rayo, rectángulo, círculo/elipse, dibujo libre, texto, imagen (PNG/JPG…), Fibonacci manual y borrador.
+  - Herramientas agrupadas: cursor; líneas (horizontal, vertical, tendencia, rayo); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci manual; borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
   - Con el cursor (↖) puedes mover y redimensionar lo dibujado. Clic derecho sobre un dibujo cambia el color o el grosor, o lo elimina.
   - Esc cancela la herramienta, Ctrl+Z deshace, 👁 oculta los dibujos y 🗑 los borra todos.
   - Se guardan por símbolo, anclados a fecha y precio, así que siguen en su lugar al cambiar el intervalo, el periodo o la escala log.

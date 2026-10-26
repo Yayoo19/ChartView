@@ -1,6 +1,7 @@
 """Descarga de datos de mercado con yfinance (Yahoo Finance)."""
 from __future__ import annotations
 
+import re
 import warnings
 
 warnings.filterwarnings("ignore", module="yfinance")
@@ -213,6 +214,44 @@ def load(symbol: str, interval_label: str, period: str):
     except Exception:
         meta = {}
     return df, meta, period
+
+
+_CORP_SUFFIX = re.compile(
+    r"[,\s]+(inc\.?|corp\.?|corporation|ltd\.?|limited|plc|holdings?|co\.?|ag|se|n\.?\s?v\.?|"
+    r"s\.?\s?a\.?\s?b\.?(\s?de\s?c\.?\s?v\.?)?|s\.?\s?a\.?(\s?de\s?c\.?\s?v\.?)?|de\s?c\.?\s?v\.?)$", re.I)
+
+
+def short_name(name: str) -> str:
+    """«Wal-Mart de México, S.A.B. de C.V.» -> «Wal-Mart de México» (para la lista de seguimiento)."""
+    name = (name or "").strip()
+    prev = None
+    while name and name != prev:
+        prev = name
+        name = _CORP_SUFFIX.sub("", name).strip(" ,")
+    return name or prev or ""
+
+
+def lookup_names(symbols: list[str]) -> dict[str, str]:
+    """Nombre legible de cada símbolo (catálogo macro o búsqueda exacta en Yahoo)."""
+    out = {}
+    for s in symbols:
+        if macro.is_macro(s):
+            prefix, _, key = s.upper().partition(":")
+            if prefix == "MACRO" and key in macro.CATALOG:
+                out[s] = macro.CATALOG[key][1]
+            elif prefix == "CSV":
+                out[s] = key.replace("_", " ").title()
+            else:
+                out[s] = "Serie de FRED"
+            continue
+        try:
+            res = yf.Search(s, max_results=8, news_count=0)
+            q = next((q for q in res.quotes or [] if q.get("symbol", "").upper() == s.upper()), None)
+            if q:
+                out[s] = short_name(q.get("longname") or q.get("shortname") or "")
+        except Exception:
+            continue
+    return out
 
 
 def search(query: str) -> list[dict]:

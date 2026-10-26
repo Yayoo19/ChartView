@@ -37,6 +37,78 @@ class ColorButton(QtWidgets.QPushButton):
             self.set_color(c.name())
 
 
+def build_param_editors(form: QtWidgets.QFormLayout, d, params: dict) -> dict:
+    """Agrega al formulario un control por parámetro del indicador y los devuelve por nombre."""
+    editors = {}
+    for p in d.params:
+        v = params.get(p.name, p.default)
+        if p.options is not None:
+            w = QtWidgets.QComboBox()
+            w.addItems([str(o) for o in p.options])
+            w.setCurrentText(str(v))
+        elif p.is_int:
+            w = QtWidgets.QSpinBox()
+            w.setRange(int(p.minimum), int(p.maximum) if p.maximum < 2 ** 31 else 2 ** 31 - 1)
+            w.setSingleStep(int(p.step or 1))
+            w.setValue(int(v))
+        else:
+            w = QtWidgets.QDoubleSpinBox()
+            w.setDecimals(3)
+            w.setRange(float(p.minimum), float(p.maximum))
+            w.setSingleStep(float(p.step or 0.1))
+            w.setValue(float(v))
+        editors[p.name] = w
+        form.addRow(p.label + ":", w)
+    if not d.params:
+        form.addRow(QtWidgets.QLabel("Sin parámetros."))
+    return editors
+
+
+def collect_params(editors: dict) -> dict:
+    return {name: (w.currentText() if isinstance(w, QtWidgets.QComboBox) else w.value())
+            for name, w in editors.items()}
+
+
+class IndicatorEditDialog(QtWidgets.QDialog):
+    """Editor rápido de un indicador, abierto desde la ⚙ de la leyenda de la gráfica."""
+
+    def __init__(self, instance: dict, parent=None):
+        super().__init__(parent)
+        d = REGISTRY[instance["key"]]
+        self.setWindowTitle(d.name)
+        self.setMinimumWidth(340)
+        self.instance = deepcopy(instance)
+        lay = QtWidgets.QVBoxLayout(self)
+        if d.description:
+            desc = QtWidgets.QLabel(d.description)
+            desc.setWordWrap(True)
+            desc.setStyleSheet("color:#9598a1;")
+            lay.addWidget(desc)
+        form = QtWidgets.QFormLayout()
+        self._editors = build_param_editors(form, d, {**d.defaults(), **instance.get("params", {})})
+        self.color_btn = ColorButton()
+        self.color_btn.set_color(instance.get("color"))
+        reset = QtWidgets.QPushButton("Auto")
+        reset.setFixedWidth(50)
+        reset.clicked.connect(lambda: self.color_btn.set_color(None))
+        crow = QtWidgets.QHBoxLayout()
+        crow.addWidget(self.color_btn, 1)
+        crow.addWidget(reset)
+        form.addRow("Color:", crow)
+        lay.addLayout(form)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        bb.button(QtWidgets.QDialogButtonBox.Ok).setText("Aplicar")
+        bb.button(QtWidgets.QDialogButtonBox.Cancel).setText("Cancelar")
+        bb.accepted.connect(self._accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _accept(self):
+        self.instance["params"] = collect_params(self._editors)
+        self.instance["color"] = self.color_btn.color
+        self.accept()
+
+
 class IndicatorDialog(QtWidgets.QDialog):
     def __init__(self, active: list[dict], parent=None):
         super().__init__(parent)
@@ -162,39 +234,12 @@ class IndicatorDialog(QtWidgets.QDialog):
         self.desc.setText(d.description or ("Se dibuja sobre el precio." if d.overlay else "Se dibuja en un panel debajo del precio."))
         while self.form.rowCount():
             self.form.removeRow(0)
-        self._editors = {}
-        for p in d.params:
-            v = params[p.name]
-            if p.options is not None:
-                w = QtWidgets.QComboBox()
-                w.addItems([str(o) for o in p.options])
-                w.setCurrentText(str(v))
-            elif p.is_int:
-                w = QtWidgets.QSpinBox()
-                w.setRange(int(p.minimum), int(p.maximum) if p.maximum < 2 ** 31 else 2 ** 31 - 1)
-                w.setSingleStep(int(p.step or 1))
-                w.setValue(int(v))
-            else:
-                w = QtWidgets.QDoubleSpinBox()
-                w.setDecimals(3)
-                w.setRange(float(p.minimum), float(p.maximum))
-                w.setSingleStep(float(p.step or 0.1))
-                w.setValue(float(v))
-            self._editors[p.name] = w
-            self.form.addRow(p.label + ":", w)
-        if not d.params:
-            self.form.addRow(QtWidgets.QLabel("Sin parámetros."))
+        self._editors = build_param_editors(self.form, d, params)
         self.color_btn.set_color(color)
         self._set_buttons()
 
     def _collect(self) -> dict:
-        out = {}
-        for name, w in self._editors.items():
-            if isinstance(w, QtWidgets.QComboBox):
-                out[name] = w.currentText()
-            else:
-                out[name] = w.value()
-        return out
+        return collect_params(self._editors)
 
     def _set_buttons(self):
         self.add_btn.setEnabled(self._key is not None)
