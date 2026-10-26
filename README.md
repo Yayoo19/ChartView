@@ -28,22 +28,29 @@ Las siguientes veces basta con la última línea.
 
 ## Símbolos
 
-| Mercado | Escribes | Se abre |
-|---|---|---|
-| México (BMV) | `WALMEX`, `AMXB`, `GFNORTEO` | `WALMEX.MX`… · IPC: `^MXX` · Dólar: `MXN=X` |
-| EE.UU. | `AAPL`, `SPY`, `^GSPC` | igual |
-| Asia | `^N225` (Nikkei), `^HSI` (Hang Seng), `^KS11` (KOSPI), `000001.SS` (Shanghai), `^TWII`… | igual · acciones: `7203.T` Tokio, `0700.HK` Hong Kong, `600519.SS` China, `005930.KS` Corea |
-| Macro EE.UU. | `M2`, `M1`, `FED_BALANCE`, `FED_FUNDS`, `UST3M`, `UST2Y`, `UST10Y`, `UST30Y`, `SPREAD_10Y2Y`, `SPREAD_10Y3M` | `MACRO:M2`… (datos oficiales de la Reserva Federal vía DBnomics) · bonos en Yahoo: `2YY=F`, `^TNX`, `ZT=F`, `ZN=F`, `TLT` · con clave de FRED, cualquier ID: `WALCL`, `M2SL`, `DGS10`… |
-| Cripto | `BTC`, `ETH`, `SOL` | `BTC-USD`… (también `BTC-EUR`, `ETH-BTC`) |
-| Directo | cualquier símbolo de Yahoo | igual (`GC=F`, `EURUSD=X`, `^N225`…) |
+Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Escribe un símbolo o un nombre ("walmex", "apple", "bitcoin", "nikkei", "bono 10") y elige una sugerencia. Si presionas Enter sin elegir, se abre la mejor sugerencia. Si escribes un nombre que no es un símbolo, se busca por nombre.
 
-Con **Buscar** (Ctrl+F) puedes buscar por nombre ("Cemex", "Bitcoin", "bono 10", "balance").
+| Región | Ejemplos |
+|---|---|
+| México (BMV) | `WALMEX.MX`, `AMXB.MX`, `GFNORTEO.MX` · IPC: `^MXX` · dólar: `MXN=X` |
+| EE.UU. | `AAPL`, `SPY`, `^GSPC`, `GC=F` |
+| Asia | `^N225` (Nikkei), `^HSI` (Hang Seng), `^KS11` (KOSPI), `000001.SS` (Shanghai) · acciones: `7203.T` Tokio, `0700.HK` Hong Kong, `600519.SS` China, `005930.KS` Corea |
+| Macro EE.UU. | `MACRO:M2`, `MACRO:FED_BALANCE`, `MACRO:UST2Y`, `MACRO:UST10Y`, `MACRO:SPREAD_10Y2Y` (Reserva Federal vía DBnomics) · bonos en Yahoo: `2YY=F`, `^TNX`, `ZT=F`, `ZN=F`, `TLT` · con clave de FRED: `FRED:WALCL`, `FRED:M2SL`… |
+| Cripto | `BTC-USD`, `ETH-USD`, `SOL-USD`, `BTC-EUR` |
+
+**Archivo → Búsqueda avanzada** (Ctrl+F) muestra los resultados en una tabla con bolsa y tipo.
+
+## Interfaz
+
+- **Barra superior:** buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Alertas y ⟳ (actualizar).
+- **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
+- **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
 ### Datos macro
 
 - **Catálogo de la Fed** (sin registro): M2 y M1 (H.6, mensual desde 1959), balance de la Fed (H.4.1, semanal desde 2002), tasas del Tesoro y fondos federales (H.15, diario) y los diferenciales de la curva.
-- **FRED**: en ⚙ → *Clave API de FRED* escribes una clave gratuita (https://fredaccount.stlouisfed.org/apikeys). Con ella abres cualquier serie de FRED por su ID en el mercado "Macro EE.UU.".
-- **Series propias / ISM PMI**: el ISM PMI no se publica en ninguna fuente gratuita (FRED lo retiró en 2016). Guarda el histórico en un CSV con dos columnas, fecha y valor, e impórtalo en ⚙ → *Importar serie desde CSV*. Queda como `CSV:<NOMBRE>`. Para actualizarlo, vuelve a importar el CSV con el mismo nombre.
+- **FRED**: en Herramientas → *Clave API de FRED* escribes una clave gratuita (https://fredaccount.stlouisfed.org/apikeys). Con ella abres cualquier serie de FRED escribiendo `FRED:` y su ID, por ejemplo `FRED:WALCL`.
+- **Series propias / ISM PMI**: el ISM PMI no se publica en ninguna fuente gratuita (FRED lo retiró en 2016). Guarda el histórico en un CSV con dos columnas, fecha y valor, e impórtalo en Archivo → *Importar serie desde CSV*. Queda como `CSV:<NOMBRE>`. Para actualizarlo, vuelve a importar el CSV con el mismo nombre.
 - Las series con un solo valor por fecha se dibujan como línea. Con un intervalo más amplio que la serie (p. ej. tasas diarias en 1 semana) se arman velas.
 - Para ver el crecimiento anual de M2, agrega el indicador ROC con periodo 12 en intervalo mensual.
 
@@ -52,7 +59,7 @@ Con **Buscar** (Ctrl+F) puedes buscar por nombre ("Cemex", "Bitcoin", "bono 10",
 - Rueda del mouse: zoom en el tiempo · arrastrar: desplazar · el eje Y se ajusta solo.
 - **Indicadores** (Ctrl+I): catálogo por categorías, parámetros editables, color y orden. La flecha del botón agrega un indicador directo con valores por defecto.
 - Tipos de gráfica: velas, Heikin Ashi, barras OHLC, línea y área.
-- Casilla **Log** (Alt+L): escala logarítmica en la gráfica de precio, incluidos los indicadores dibujados sobre ella.
+- **Log** (abajo de la gráfica o Alt+L): escala logarítmica en la gráfica de precio, incluidos los indicadores dibujados sobre ella.
 - Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora, y las de 2 semanas con velas semanales (siempre empiezan en lunes). Las de 3, 6 y 12 meses se arman con velas mensuales, alineadas a trimestres, semestres y años del calendario.
 - El panel de listas se puede cerrar con la ✕ o arrastrar a otro lado. Se vuelve a abrir con **☰ Listas** (primer botón de la barra) o Ctrl+B. La app recuerda dónde lo dejaste.
 - Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas, y con clic derecho copias un símbolo a otra lista.
@@ -72,7 +79,7 @@ Con **Buscar** (Ctrl+F) puedes buscar por nombre ("Cemex", "Bitcoin", "bono 10",
   - Opcional: al cerrar la ventana, ChartView sigue vigilando desde la bandeja del sistema. Se cierra del todo con clic derecho en su icono → Salir.
   - Las alertas solo se revisan mientras ChartView está abierto (o en la bandeja).
 - Actualización automática, lista de seguimiento con precios y captura PNG (Ctrl+S).
-- F5 actualiza · Inicio vuelve a las velas recientes.
+- Todos los atajos de teclado están en Ayuda → Atajos de teclado (F1).
 
 La configuración se guarda en `%USERPROFILE%\.chartview\config.json`.
 

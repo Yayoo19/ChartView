@@ -13,9 +13,25 @@ from .chart import CHART_TYPES, DOWN, UP, ChartWidget, fmt_change, fmt_price
 from .dialogs import IndicatorDialog, SearchDialog
 from .drawings import TOOLS
 from .indicators import REGISTRY, by_category, compute
+from .searchbox import SymbolSearch
 from .workers import run_task
 
 REFRESH_OPTIONS = [("15 s", 15), ("30 s", 30), ("1 min", 60), ("5 min", 300), ("15 min", 900)]
+
+# botones rápidos de intervalo (texto corto, intervalo); el resto está en la lista desplegable
+QUICK_INTERVALS = [("5m", "5 minutos"), ("15m", "15 minutos"), ("1h", "1 hora"), ("4h", "4 horas"),
+                   ("D", "1 día"), ("S", "1 semana"), ("M", "1 mes")]
+# botones de rango bajo la gráfica
+RANGE_ORDER = ["1d", "5d", "1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "10y", "max"]
+RANGE_LABELS = {"1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M", "ytd": "YTD", "1y": "1A",
+                "2y": "2A", "5y": "5A", "10y": "10A", "max": "Todo"}
+SHORTCUTS = [
+    ("Ctrl+L", "Ir al buscador de símbolos"), ("Ctrl+F", "Búsqueda avanzada"), ("F5", "Actualizar datos"),
+    ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"),
+    ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
+    ("Ctrl+Z", "Deshacer último dibujo"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
+    ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
+]
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -30,10 +46,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.meta: dict = {}
         self.symbol: str = ""
         self._req = 0
+        self.period_key: str = self.cfg.get("period", "2y")
 
+        self._build_actions()
         self._build_toolbar()
         self._build_center()
         self._build_watchlist()
+        self._build_menu()
         self._build_shortcuts()
         self.statusBar().showMessage("Listo")
 
@@ -53,6 +72,42 @@ class MainWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(500, self.refresh_quotes)
 
     # ================================================================ UI
+    def _build_actions(self):
+        """Acciones compartidas por el menú y las barras: así siempre están sincronizadas."""
+        def action(text, tip="", shortcut=None, checkable=False, slot=None, short=None):
+            # text = cómo se lee en el menú · short = texto corto en los botones
+            a = QtGui.QAction(text, self)
+            if short:
+                a.setIconText(short)
+            a.setToolTip(tip or text)
+            if shortcut:
+                a.setShortcut(QtGui.QKeySequence(shortcut))
+            a.setCheckable(checkable)
+            if slot:
+                a.triggered.connect(slot)
+            return a
+
+        self.log_scale = action("Escala logarítmica", "Escala logarítmica en la gráfica de precio (Alt+L)",
+                                "Alt+L", True, short="Log")
+        self.log_scale.setChecked(bool(self.cfg.get("log_scale")))
+        self.log_scale.toggled.connect(lambda _c: (self.redraw(keep_view=True), self._save()))
+        self.auto = action("Actualización automática", "Actualizar la gráfica automáticamente",
+                           checkable=True, short="Auto")
+        self.auto.setChecked(bool(self.cfg.get("auto_refresh")))
+        self.auto.toggled.connect(self._apply_auto_refresh)
+        self.auto_every = QtWidgets.QComboBox()
+        self.auto_every.setToolTip("Cada cuánto se actualiza la gráfica en modo Auto")
+        for label, secs in REFRESH_OPTIONS:
+            self.auto_every.addItem(label, secs)
+        self.auto_every.setCurrentIndex(max(0, self.auto_every.findData(self.cfg.get("refresh_secs", 60))))
+        self.auto_every.currentIndexChanged.connect(self._apply_auto_refresh)
+        self.refresh_act = action("Actualizar datos", "Actualizar datos (F5)", "F5", short="⟳",
+                                  slot=lambda: self.load(self.symbol, raw=True, keep_view=True))
+        self.fit_act = action("Ver toda la historia", "Ver toda la historia cargada", short="Ver todo",
+                              slot=lambda: self.chart.fit_all())
+        self.recent_act = action("Ver últimas velas", "Ver las últimas velas (Inicio)", "Home", short="Recientes",
+                                 slot=lambda: self.chart.show_last(self.chart.default_bars))
+
     def _build_toolbar(self):
         tb = QtWidgets.QToolBar("Principal")
         tb.setObjectName("main_toolbar")
@@ -61,44 +116,38 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addToolBar(tb)
         self.main_tb = tb
 
-        self.market = QtWidgets.QComboBox()
-        self.market.addItems(data.MARKETS)
-        self.market.setCurrentText(self.cfg.get("market", "EE.UU."))
-        self.market.setToolTip("México agrega .MX · Cripto agrega -USD · Directo usa el símbolo tal cual")
-        self.market.currentTextChanged.connect(self._update_completer)
+        # un solo buscador para todos los mercados (sustituye al selector «Mercado»)
+        self.sym_edit = SymbolSearch(self._known_symbols)
+        self.sym_edit.symbolChosen.connect(lambda s, by_name: self.load(s, raw=True, by_name=by_name))
+        tb.addWidget(self.sym_edit)
+        tb.addSeparator()
 
-        self.sym_edit = QtWidgets.QLineEdit()
-        self.sym_edit.setPlaceholderText("Símbolo (AAPL, WALMEX, BTC…)")
-        self.sym_edit.setFixedWidth(200)
-        self.sym_edit.returnPressed.connect(lambda: self.load(self.sym_edit.text()))
-        self._update_completer()
-
-        go = QtWidgets.QPushButton("Ver")
-        go.clicked.connect(lambda: self.load(self.sym_edit.text()))
-        find = QtWidgets.QPushButton("🔍 Buscar")
-        find.setToolTip("Buscar por nombre (Ctrl+F)")
-        find.clicked.connect(self.open_search)
-
+        # intervalos más usados como botones; el resto en la lista desplegable
+        self._interval_group = QtWidgets.QButtonGroup(self)
+        self._interval_btns = {}
+        for short, label in QUICK_INTERVALS:
+            b = QtWidgets.QToolButton()
+            b.setText(short)
+            b.setToolTip(label)
+            b.setCheckable(True)
+            b.clicked.connect(lambda _c=False, lab=label: self.interval.setCurrentText(lab))
+            self._interval_group.addButton(b)
+            self._interval_btns[label] = b
+            tb.addWidget(b)
         self.interval = QtWidgets.QComboBox()
+        self.interval.setToolTip("Todos los intervalos")
         self.interval.addItems(list(data.INTERVALS))
         self.interval.setCurrentText(self.cfg.get("interval", "1 día"))
         self.interval.currentTextChanged.connect(self._on_interval)
-
-        self.period = QtWidgets.QComboBox()
-        for key, label, _ in data.PERIODS:
-            self.period.addItem(label, key)
-        self._set_period(self.cfg.get("period", "2y"))
-        self.period.currentIndexChanged.connect(lambda _i: self.load(self.symbol, raw=True))
+        tb.addWidget(self.interval)
+        tb.addSeparator()
 
         self.ctype = QtWidgets.QComboBox()
+        self.ctype.setToolTip("Tipo de gráfica")
         self.ctype.addItems(CHART_TYPES)
         self.ctype.setCurrentText(self.cfg.get("chart_type", "Velas"))
         self.ctype.currentTextChanged.connect(lambda _t: self.redraw(keep_view=True))
-
-        self.log_scale = QtWidgets.QCheckBox("Log")
-        self.log_scale.setToolTip("Escala logarítmica en la gráfica de precio (Alt+L)")
-        self.log_scale.setChecked(bool(self.cfg.get("log_scale")))
-        self.log_scale.toggled.connect(lambda _c: (self.redraw(keep_view=True), self._save()))
+        tb.addWidget(self.ctype)
 
         ind_btn = QtWidgets.QToolButton()
         ind_btn.setText("📈 Indicadores")
@@ -117,53 +166,104 @@ class MainWindow(QtWidgets.QMainWindow):
         menu.addSeparator()
         menu.addAction("Quitar todos", self._clear_indicators)
         ind_btn.setMenu(menu)
-
-        refresh = QtWidgets.QPushButton("⟳")
-        refresh.setToolTip("Actualizar (F5)")
-        refresh.setFixedWidth(32)
-        refresh.clicked.connect(lambda: self.load(self.symbol, raw=True, keep_view=True))
-
-        self.auto = QtWidgets.QCheckBox("Auto")
-        self.auto.setToolTip("Actualizar automáticamente")
-        self.auto.setChecked(bool(self.cfg.get("auto_refresh")))
-        self.auto.toggled.connect(self._apply_auto_refresh)
-        self.auto_every = QtWidgets.QComboBox()
-        for label, secs in REFRESH_OPTIONS:
-            self.auto_every.addItem(label, secs)
-        idx = max(0, self.auto_every.findData(self.cfg.get("refresh_secs", 60)))
-        self.auto_every.setCurrentIndex(idx)
-        self.auto_every.currentIndexChanged.connect(self._apply_auto_refresh)
-
-        fit = QtWidgets.QPushButton("Ver todo")
-        fit.clicked.connect(lambda: self.chart.fit_all())
-        last = QtWidgets.QPushButton("Recientes")
-        last.setToolTip("Mostrar las últimas velas (Inicio)")
-        last.clicked.connect(lambda: self.chart.show_last(self.chart.default_bars))
-        shot = QtWidgets.QPushButton("📷")
-        shot.setToolTip("Guardar imagen de la gráfica")
-        shot.setFixedWidth(32)
-        shot.clicked.connect(self.save_image)
-        tools = QtWidgets.QToolButton()
-        tools.setText("⚙")
-        tools.setToolTip("Datos macro y configuración")
-        tools.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-        tmenu = QtWidgets.QMenu(tools)
-        tmenu.addAction("Importar serie desde CSV… (p. ej. ISM PMI)", self.import_series)
-        tmenu.addAction("Clave API de FRED…", self.set_fred_key)
-        tools.setMenu(tmenu)
+        tb.addWidget(ind_btn)
         self.alert_btn = QtWidgets.QPushButton("🔔 Alertas")
         self.alert_btn.setToolTip("Alertas de precio e indicadores (Ctrl+Alt+A)")
         self.alert_btn.clicked.connect(self.open_alerts)
+        tb.addWidget(self.alert_btn)
 
-        def lbl(t):
-            w = QtWidgets.QLabel(t)
-            w.setStyleSheet("color:#9598a1; padding:0 4px 0 10px;")
-            return w
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        tb.addWidget(spacer)
+        tb.addAction(self.refresh_act)
+        self._sync_interval_buttons(self.interval.currentText())
 
-        for w in (lbl("Mercado"), self.market, self.sym_edit, go, find, lbl("Intervalo"), self.interval,
-                  lbl("Periodo"), self.period, lbl("Tipo"), self.ctype, self.log_scale, ind_btn, self.alert_btn, refresh, self.auto,
-                  self.auto_every, fit, last, shot, tools):
-            tb.addWidget(w)
+    def _build_rangebar(self):
+        """Barra bajo la gráfica: cuánta historia ver (rango) y opciones de visualización."""
+        w = QtWidgets.QWidget()
+        w.setObjectName("rangebar")
+        w.setStyleSheet(
+            "#rangebar QToolButton{background:transparent;border:none;border-radius:4px;padding:3px 9px;color:#b2b5be;}"
+            "#rangebar QToolButton:hover{background:#2a2e39;}"
+            "#rangebar QToolButton:checked{background:#2a2e39;color:#ffffff;}"
+            "#rangebar QToolButton:disabled{color:#4a4e59;}"
+            "#rangebar QComboBox{padding:2px 6px;}")
+        h = QtWidgets.QHBoxLayout(w)
+        h.setContentsMargins(40, 2, 4, 2)  # alineada con la gráfica (a la derecha de la barra de dibujo)
+        h.setSpacing(2)
+        self._range_group = QtWidgets.QButtonGroup(self)
+        self._range_btns = {}
+        labels = {k: lab for k, lab, _ in data.PERIODS}
+        for key in RANGE_ORDER:
+            b = QtWidgets.QToolButton()
+            b.setText(RANGE_LABELS[key])
+            b.setToolTip(f"Ver {labels[key].lower()} de historia")
+            b.setCheckable(True)
+            b.clicked.connect(lambda _c=False, k=key: self._on_range(k))
+            self._range_group.addButton(b)
+            self._range_btns[key] = b
+            h.addWidget(b)
+        h.addStretch(1)
+        for act in (self.log_scale, self.auto):
+            b = QtWidgets.QToolButton()
+            b.setDefaultAction(act)
+            h.addWidget(b)
+        h.addWidget(self.auto_every)
+        h.addSpacing(10)
+        for act in (self.fit_act, self.recent_act):
+            b = QtWidgets.QToolButton()
+            b.setDefaultAction(act)
+            h.addWidget(b)
+        self._set_period(self.period_key)
+        self._sync_range_enabled(self.interval.currentText())
+        return w
+
+    def _build_menu(self):
+        mb = self.menuBar()
+        f = mb.addMenu("&Archivo")
+        f.addAction("Buscar símbolo", lambda: (self.sym_edit.setFocus(), self.sym_edit.selectAll()),
+                    QtGui.QKeySequence("Ctrl+L"))
+        f.addAction("Búsqueda avanzada…", self.open_search, QtGui.QKeySequence("Ctrl+F"))
+        f.addAction("Importar serie desde CSV… (p. ej. ISM PMI)", self.import_series)
+        f.addSeparator()
+        f.addAction("Guardar imagen de la gráfica…", self.save_image, QtGui.QKeySequence("Ctrl+S"))
+        f.addSeparator()
+        f.addAction("Salir", self.quit_app, QtGui.QKeySequence("Ctrl+Q"))
+
+        v = mb.addMenu("&Ver")
+        v.addAction(self.watch_dock.toggleViewAction())
+        v.addSeparator()
+        v.addAction(self.log_scale)
+        v.addAction(self.fit_act)
+        v.addAction(self.recent_act)
+        v.addSeparator()
+        v.addAction(self.refresh_act)
+        v.addAction(self.auto)
+        v.addSeparator()
+        full = v.addAction("Pantalla completa", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen(),
+                           QtGui.QKeySequence("F11"))
+        full.setToolTip("Pantalla completa (F11)")
+
+        t = mb.addMenu("&Herramientas")
+        t.addAction("Indicadores…", self.open_indicators, QtGui.QKeySequence("Ctrl+I"))
+        t.addAction("Alertas…", self.open_alerts, QtGui.QKeySequence("Ctrl+Alt+A"))
+        t.addSeparator()
+        t.addAction("Clave API de FRED…", self.set_fred_key)
+
+        a = mb.addMenu("A&yuda")
+        a.addAction("Atajos de teclado", self.show_shortcuts, QtGui.QKeySequence("F1"))
+        a.addAction("Acerca de ChartView", self.show_about)
+
+    def show_shortcuts(self):
+        rows = "".join(f"<tr><td style='padding:3px 16px 3px 0'><b>{k}</b></td><td>{d}</td></tr>" for k, d in SHORTCUTS)
+        QtWidgets.QMessageBox.information(self, "Atajos de teclado", f"<table>{rows}</table>")
+
+    def show_about(self):
+        QtWidgets.QMessageBox.about(
+            self, "Acerca de ChartView",
+            "<b>ChartView</b><br>Gráficas de mercado de escritorio en Python.<br><br>"
+            "Datos: Yahoo Finance, Reserva Federal (DBnomics) y FRED.<br>"
+            "<a href='https://github.com/Yayoo19/ChartView' style='color:#2962ff'>github.com/Yayoo19/ChartView</a>")
 
     def _build_center(self):
         w = QtWidgets.QWidget()
@@ -190,6 +290,7 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.header)
         lay.addWidget(self.info)
         lay.addLayout(row, 1)
+        lay.addWidget(self._build_rangebar())
         self.setCentralWidget(w)
 
     def _build_drawbar(self):
@@ -337,7 +438,8 @@ class MainWindow(QtWidgets.QMainWindow):
         dock.setObjectName("watchlist_dock")  # necesario para guardar/restaurar su estado
         # botón (y Ctrl+B) para volver a abrir el panel después de cerrarlo con la ✕
         toggle = dock.toggleViewAction()
-        toggle.setText("☰ Listas")
+        toggle.setText("Listas de seguimiento")
+        toggle.setIconText("☰ Listas")
         toggle.setToolTip("Mostrar u ocultar las listas de seguimiento (Ctrl+B)")
         toggle.setShortcut(QtGui.QKeySequence("Ctrl+B"))
         self.addAction(toggle)  # el atajo funciona aunque el panel esté oculto
@@ -347,17 +449,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._fill_watchlist_combo(self.cfg.get("active_watchlist"))
 
     def _build_shortcuts(self):
+        # el resto de los atajos están en las acciones del menú (_build_menu)
         for seq, fn in [
-            ("F5", lambda: self.load(self.symbol, raw=True, keep_view=True)),
-            ("Ctrl+I", self.open_indicators),
-            ("Ctrl+F", self.open_search),
-            ("Ctrl+L", lambda: (self.sym_edit.setFocus(), self.sym_edit.selectAll())),
-            ("Home", lambda: self.chart.show_last(self.chart.default_bars)),
-            ("Ctrl+S", self.save_image),
-            ("Alt+L", self.log_scale.toggle),
             ("Esc", lambda: self._tool_actions["cursor"].trigger()),
             ("Ctrl+Z", self.chart.layer.undo),
-            ("Ctrl+Alt+A", self.open_alerts),
         ]:
             QtGui.QShortcut(QtGui.QKeySequence(seq), self, activated=fn)
 
@@ -507,36 +602,62 @@ class MainWindow(QtWidgets.QMainWindow):
                     it.setText(2, f"{chg:+.2f}%")
                     it.setForeground(2, QtGui.QColor(UP if chg >= 0 else DOWN))
 
-    def _update_completer(self, *_):
-        market = self.market.currentText()
-        words = data.POPULAR.get(market) or [s for v in data.POPULAR.values() for s in v]
-        if market == macro.MARKET:
-            words = words + macro.imported()
-        comp = QtWidgets.QCompleter(words, self)
-        comp.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
-        comp.setFilterMode(QtCore.Qt.MatchContains)
-        comp.activated.connect(lambda s: self.load(s, raw=True))
-        self.sym_edit.setCompleter(comp)
+    def _known_symbols(self) -> dict[str, str]:
+        """Sugerencias locales del buscador: {símbolo: descripción}."""
+        out = {}
+        for lst in self.cfg.get("watchlists", {}).values():
+            for group, syms in lst.items():
+                for s in syms:
+                    out.setdefault(s, group)
+        for group, syms in data.POPULAR.items():
+            for s in syms:
+                out.setdefault(s, group)
+        for key, (_path, name, *_rest) in macro.CATALOG.items():
+            out[f"MACRO:{key}"] = name
+        for s in macro.imported():
+            out[s] = "Serie importada (CSV)"
+        return out
 
     # ======================================================== carga
     def _set_period(self, key):
-        i = self.period.findData(key)
-        self.period.blockSignals(True)
-        self.period.setCurrentIndex(i if i >= 0 else 0)
-        self.period.blockSignals(False)
+        self.period_key = key
+        if getattr(self, "_range_btns", None):
+            self._range_group.setExclusive(False)
+            for k, b in self._range_btns.items():
+                b.setChecked(k == key)
+            self._range_group.setExclusive(True)
+
+    def _on_range(self, key):
+        self._set_period(key)
+        self.load(self.symbol, raw=True)
+
+    def _sync_interval_buttons(self, label):
+        self._interval_group.setExclusive(False)
+        for lab, b in self._interval_btns.items():
+            b.setChecked(lab == label)
+        self._interval_group.setExclusive(True)
+
+    def _sync_range_enabled(self, label):
+        """Desactiva los rangos que Yahoo no da para intervalos intradía (p. ej. 1 minuto = 7 días)."""
+        yi = data.INTERVALS[label][0]
+        for k, b in getattr(self, "_range_btns", {}).items():
+            b.setEnabled(data.clamp_period(yi, k) == k)
 
     def _on_interval(self, label):
+        self._sync_interval_buttons(label)
+        self._sync_range_enabled(label)
         self._set_period(data.INTERVALS[label][3])
         self.load(self.symbol, raw=True)
 
-    def load(self, text, raw=False, keep_view=False, silent=False):
-        sym = text.strip().upper() if raw else data.resolve_symbol(text, self.market.currentText())
+    def load(self, text, raw=False, keep_view=False, silent=False, by_name=False):
+        """Carga un símbolo. ``by_name``: si no existe tal cual, se busca por nombre y se abre el primero."""
+        sym = text.strip().upper()
         if not sym:
             return
         same = sym == self.symbol
         self.sym_edit.setText(sym)
         interval = self.interval.currentText()
-        period = self.period.currentData()
+        period = self.period_key
         self._req += 1
         req = self._req
         if not silent:
@@ -562,6 +683,16 @@ class MainWindow(QtWidgets.QMainWindow):
             if not silent:
                 QtWidgets.QApplication.restoreOverrideCursor()
             if req != self._req:
+                return
+            if by_name:  # «walmex», «bitcoin»…: se busca por nombre y se abre el mejor resultado
+                def found(rows, req=req):
+                    if req == self._req and rows:
+                        self.load(rows[0]["symbol"], raw=True)
+                    elif req == self._req:
+                        QtWidgets.QMessageBox.warning(self, "No se encontró", f"No encontré nada para «{sym}».")
+                        self.sym_edit.setText(self.symbol)
+                self.statusBar().showMessage(f"Buscando «{sym}» por nombre…")
+                run_task(data.search, sym, on_done=found, on_fail=lambda e: found([]))
                 return
             self.statusBar().showMessage(f"Error al cargar {sym}: {err}", 15000)
             if not silent:
@@ -656,7 +787,6 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "No se pudo importar", str(e))
             return
         self.statusBar().showMessage(f"Serie importada como {sym}. Para actualizarla, vuelve a importar con el mismo nombre.", 8000)
-        self.market.setCurrentText(macro.MARKET)
         self.load(sym, raw=True)
 
     def set_fred_key(self):
@@ -690,9 +820,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _save(self):
         self.cfg.update({
             "symbol": self.symbol or self.cfg.get("symbol"),
-            "market": self.market.currentText(),
             "interval": self.interval.currentText(),
-            "period": self.period.currentData(),
+            "period": self.period_key,
             "chart_type": self.ctype.currentText(),
             "log_scale": self.log_scale.isChecked(),
             "auto_refresh": self.auto.isChecked(),
@@ -912,6 +1041,11 @@ QGroupBox { border:1px solid #2a2e39; border-radius:4px; margin-top:12px; paddin
 QGroupBox::title { subcontrol-origin: margin; left:8px; color:#9598a1; }
 QMenu { background:#1e222d; border:1px solid #363a45; }
 QMenu::item:selected { background:#2962ff; }
+QToolButton:checked { background:#2962ff; border-color:#2962ff; color:#ffffff; }
+QMenuBar { background:#1e222d; color:#d1d4dc; padding:2px; }
+QMenuBar::item { padding:4px 10px; background:transparent; }
+QMenuBar::item:selected { background:#2a2e39; border-radius:4px; }
+QAbstractItemView { selection-background-color:#2962ff; }
 """
 
 
