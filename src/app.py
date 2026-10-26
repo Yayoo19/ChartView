@@ -27,7 +27,7 @@ RANGE_LABELS = {"1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M", "
                 "2y": "2A", "5y": "5A", "10y": "10A", "max": "Todo"}
 SHORTCUTS = [
     ("Ctrl+L", "Ir al buscador de símbolos"), ("Ctrl+F", "Búsqueda avanzada"), ("F5", "Actualizar datos"),
-    ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"),
+    ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"), ("Ctrl+D", "Mostrar u ocultar herramientas de dibujo"),
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
     ("Ctrl+Z", "Deshacer último dibujo"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
     ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
@@ -146,6 +146,10 @@ class MainWindow(QtWidgets.QMainWindow):
                               slot=lambda: self.chart.fit_all())
         self.recent_act = action("Ver últimas velas", "Ver las últimas velas (Inicio)", "Home", short="Recientes",
                                  slot=lambda: self.chart.show_last(self.chart.default_bars))
+        self.drawbar_act = action("Herramientas de dibujo", "Mostrar u ocultar las herramientas de dibujo (Ctrl+D)",
+                                  "Ctrl+D", True, short="✎ Dibujo")
+        self.drawbar_act.setChecked(bool(self.cfg.get("drawbar_visible", True)))
+        self.drawbar_act.toggled.connect(self._set_drawbar_visible)
 
     def _build_toolbar(self):
         tb = QtWidgets.QToolBar("Principal")
@@ -228,7 +232,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "#rangebar QToolButton:disabled{color:#4a4e59;}"
             "#rangebar QComboBox{padding:2px 6px;}")
         h = QtWidgets.QHBoxLayout(w)
-        h.setContentsMargins(40, 2, 4, 2)  # alineada con la gráfica (a la derecha de la barra de dibujo)
+        h.setContentsMargins(40, 2, 4, 2)  # el margen izquierdo se ajusta en _set_drawbar_visible
+        self._range_layout = h
         h.setSpacing(2)
         self._range_group = QtWidgets.QButtonGroup(self)
         self._range_btns = {}
@@ -271,6 +276,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         v = mb.addMenu("&Ver")
         v.addAction(self.watch_dock.toggleViewAction())
+        v.addAction(self.drawbar_act)
         v.addSeparator()
         v.addAction(self.log_scale)
         v.addAction(self.fit_act)
@@ -325,13 +331,29 @@ class MainWindow(QtWidgets.QMainWindow):
         layer.alertRequested.connect(self.alert_at_price)
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(4)
-        row.addWidget(self._build_drawbar())
+        self.drawbar = self._build_drawbar()
+        row.addWidget(self.drawbar)
         row.addWidget(self.chart, 1)
         lay.addWidget(self.header)
         lay.addWidget(self.info)
         lay.addLayout(row, 1)
         lay.addWidget(self._build_rangebar())
         self.setCentralWidget(w)
+        self._set_drawbar_visible(self.drawbar_act.isChecked())
+
+    def _set_drawbar_visible(self, on: bool):
+        if not hasattr(self, "drawbar"):
+            return
+        if not on and self.chart.layer.tool != "cursor":
+            self._tool_actions["cursor"].trigger()  # no seguir dibujando con la barra escondida
+        self.drawbar.setVisible(on)
+        # la barra de rangos se alinea con el borde izquierdo de la gráfica
+        left = self.drawbar.sizeHint().width() + 4 if on else 4
+        m = self._range_layout.contentsMargins()
+        self._range_layout.setContentsMargins(left, m.top(), m.right(), m.bottom())
+        self.cfg["drawbar_visible"] = on
+        if hasattr(self, "timer"):  # durante el arranque todavía no hay nada que guardar
+            self._save()
 
     def _build_drawbar(self):
         bar = QtWidgets.QToolBar("Dibujo")
@@ -509,6 +531,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addAction(toggle)  # el atajo funciona aunque el panel esté oculto
         first = self.main_tb.actions()[0]
         self.main_tb.insertAction(first, toggle)
+        self.main_tb.insertAction(first, self.drawbar_act)
         self.main_tb.insertSeparator(first)
         self._fill_watchlist_combo(self.cfg.get("active_watchlist"))
 
