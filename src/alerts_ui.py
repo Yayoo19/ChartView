@@ -152,7 +152,8 @@ class AlertsWindow(QtWidgets.QDialog):
                          ("Abrir gráfica", self._open), ("🔔 Probar aviso", main.test_notification),
                          ("⟳ Revisar ahora", main.check_alerts)):
             b = QtWidgets.QPushButton(text)
-            b.clicked.connect(fn)
+            # lambda: «clicked» manda un bool (checked) que no debe llegar como argumento
+            b.clicked.connect(lambda _checked=False, fn=fn: fn())
             row.addWidget(b)
         lay.addLayout(row)
 
@@ -247,6 +248,8 @@ class AlertsWindow(QtWidgets.QDialog):
             self.refresh()
 
     def add(self, preset: dict | None = None):
+        if not isinstance(preset, dict):
+            preset = None
         price = self.main.last_price()
         a = preset or new_alert(self.main.symbol or "", "price_cross_up", price or 0)
         dlg = AlertEditDialog(a, price if (preset is None or preset["symbol"] == self.main.symbol) else None, self)

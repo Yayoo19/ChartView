@@ -229,7 +229,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addWidget(self.compare_btn)
         self.alert_btn = QtWidgets.QPushButton("🔔 Alertas")
         self.alert_btn.setToolTip("Alertas de precio e indicadores (Ctrl+Alt+A)")
-        self.alert_btn.clicked.connect(self.open_alerts)
+        self.alert_btn.clicked.connect(lambda: self.open_alerts())
         tb.addWidget(self.alert_btn)
 
         spacer = QtWidgets.QWidget()
@@ -1206,6 +1206,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._alert_state.pop(alert_id, None)
 
     def open_alerts(self, preset=None):
+        if not isinstance(preset, dict):  # desde un botón o menú llega un bool, no una alerta
+            preset = None
         if self._alerts_win is None:
             self._alerts_win = AlertsWindow(self, self)
             self._alerts_win.changed.connect(self._on_alerts_changed)
