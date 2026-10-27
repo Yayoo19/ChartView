@@ -55,6 +55,14 @@ def fmt_big(v) -> str:
     return f"{v:.0f}" if a >= 100 else fmt_price(v)
 
 
+_DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+
+
+def fmt_date(ts, intraday: bool = False) -> str:
+    """«jue 06/08/2026» o «jue 06/08/2026 14:30» (día de la semana en español, sin depender del sistema)."""
+    return f"{_DIAS[ts.weekday()]} {ts:%d/%m/%Y}" + (f" {ts:%H:%M}" if intraday else "")
+
+
 def fmt_change(v) -> str:
     """Cambio con signo: +1.25, +0.0034 o, para agregados macro, +124.90B."""
     if abs(v) >= 1e6:
@@ -313,6 +321,57 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self.grid_alpha = 0.22  # opacidad de la cuadrícula del fondo (0 = sin cuadrícula)
         self.scene().sigMouseMoved.connect(self._on_mouse)
         self.layer = DrawingLayer(self)
+        # etiquetas del cursor sobre los ejes: precio a la derecha y fecha abajo (como TradingView)
+        self._ytag = self._make_tag()
+        self._xtag = self._make_tag()
+
+    def _make_tag(self) -> QtWidgets.QLabel:
+        tag = QtWidgets.QLabel(self)
+        tag.setStyleSheet("background:#434651; color:#ffffff; padding:1px 5px; border-radius:2px; font-size:11px;")
+        tag.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        tag.hide()
+        return tag
+
+    def _hide_tags(self):
+        self._ytag.hide()
+        self._xtag.hide()
+
+    def _axis_rect(self, axis) -> QtCore.QRect:
+        """Rectángulo del eje en píxeles del widget. No se usa su boundingRect porque, con la
+        cuadrícula encendida, abarca todo el panel (el eje es quien dibuja las líneas)."""
+        local = QtCore.QRectF(QtCore.QPointF(0, 0), axis.size())
+        return self.mapFromScene(axis.mapRectToScene(local)).boundingRect()
+
+    def _show_tags(self, plot, pos, y_value: float, i: int):
+        """Etiqueta con el valor del cursor sobre el eje derecho del panel y su fecha sobre el eje de abajo."""
+        ax = plot.getAxis("right")
+        if getattr(ax, "percent", False):
+            text = f"{y_value:+.2f}%"
+        elif getattr(ax, "log", False):
+            text = fmt_price(10 ** y_value)
+        else:
+            text = fmt_value(y_value)
+        r = self._axis_rect(ax)
+        ypix = self.mapFromScene(pos).y()
+        self._ytag.setText(text)
+        self._ytag.adjustSize()
+        top = min(max(ypix - self._ytag.height() // 2, r.top()), r.bottom() - self._ytag.height())
+        self._ytag.move(r.left() + 1, top)
+        self._ytag.show()
+        self._ytag.raise_()
+
+        n = len(self.df)
+        if not 0 <= i < n:  # zona sin velas (p. ej. la nube de Ichimoku proyectada)
+            self._xtag.hide()
+            return
+        bottom = self._axis_rect(self.plots[-1].getAxis("bottom"))
+        self._xtag.setText(fmt_date(self.df.index[i], self._intraday))
+        self._xtag.adjustSize()
+        xpix = self.mapFromScene(plot.getViewBox().mapViewToScene(QtCore.QPointF(i, 0))).x()
+        left = min(max(xpix - self._xtag.width() // 2, bottom.left()), bottom.right() - self._xtag.width())
+        self._xtag.move(left, bottom.top() + 1)
+        self._xtag.show()
+        self._xtag.raise_()
 
     # ------------------------------------------------------------------ util
     def _new_plot(self, row: int, n_dates) -> pg.PlotItem:
@@ -453,6 +512,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             except (RuntimeError, TypeError):
                 pass
         self.clear()
+        self._hide_tags()
         self.plots, self._series, self._entries, self._labels, self._cross = [], {}, {}, {}, {}
         self._fixed = set()
         self._watermark = (None, None)
@@ -665,15 +725,18 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 self._cross[p][1].setPos(pt.y())
                 break
         if hovered is None:
+            self._hide_tags()
             return
         for p, (v, h) in self._cross.items():
             v.setPos(i)
             v.show()
             h.setVisible(p is hovered)
+        self._show_tags(hovered, pos, pt.y(), i)
         self._update_labels(i)
 
     def leaveEvent(self, ev):
         super().leaveEvent(ev)
+        self._hide_tags()
         for v, h in self._cross.values():
             v.hide()
             h.hide()
@@ -739,7 +802,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         chg = r["Close"] - prev
         pct = chg / prev * 100 if prev else 0
         col = UP if chg >= 0 else DOWN
-        date = df.index[ic].strftime("%d/%m/%Y %H:%M" if self._intraday else "%a %d/%m/%Y")
+        date = fmt_date(df.index[ic], self._intraday)
 
         def kv(k, v):
             return f"<span style='color:{FG}'>{k}</span> <span style='color:{col}'>{v}</span>"
