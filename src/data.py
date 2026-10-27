@@ -268,6 +268,52 @@ def _load_expr(expr, interval_label: str, period: str):
     return df, meta, used
 
 
+def candle_end(df: pd.DataFrame, meta: dict, interval_label: str):
+    """Hora (UTC) en que cierra la vela actual, o None si ya cerró o el mercado está cerrado.
+
+    Solo intervalos intradía y diario. Usa la zona horaria de la bolsa y el horario regular
+    del día que informa Yahoo (p. ej. Nueva York 9:30–16:00; cripto todo el día).
+    """
+    yi, rule, intraday, _ = INTERVALS[interval_label]
+    tz = meta.get("exchangeTimezoneName")
+    if df is None or df.empty or not tz or not (intraday or interval_label == "1 día"):
+        return None
+    try:
+        last = df.index[-1].tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
+    except Exception:
+        return None
+    if pd.isna(last):
+        return None
+    crypto = meta.get("instrumentType") == "CRYPTOCURRENCY"
+    reg = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
+
+    def ts(key):
+        if reg.get(key) is None:
+            return None
+        t = pd.Timestamp(reg[key])
+        return t.tz_localize(tz) if t.tzinfo is None else t
+
+    reg_start, reg_end = ts("start"), ts("end")
+    now = pd.Timestamp.now(tz="UTC")
+    if not crypto and (reg_start is None or reg_end is None or not reg_start <= now < reg_end):
+        return None  # mercado cerrado: no hay vela abierta
+    if interval_label == "1 día":
+        end = last + pd.Timedelta(days=1) if crypto else reg_end
+    else:
+        step = pd.Timedelta(minutes=240 if rule == "4h" else int(yi[:-1]))
+        end = last + step
+        if end <= now:
+            # Yahoo da algunos mercados con retraso (p. ej. la BMV ~20 min): se avanza
+            # a la vela que corre ahora según el reloj
+            end += step * int(np.ceil((now - end) / step))
+            if end == now:
+                end += step
+        if not crypto:
+            end = min(end, reg_end)  # la última vela del día cierra con el mercado
+    end = end.tz_convert("UTC")
+    return end if end > now else None
+
+
 def load_closes(symbols: list[str], index: pd.DatetimeIndex, interval_label: str, period: str) -> dict:
     """Cierres de otros símbolos alineados a ``index`` (para comparar). {símbolo: array | mensaje de error}."""
     out = {}

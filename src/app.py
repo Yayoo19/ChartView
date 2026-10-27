@@ -27,6 +27,9 @@ COMPARE_COLORS = ["#ff9800", "#e040fb", "#00bcd4", "#ffd600", "#76ff03", "#ec407
 RANGE_ORDER = ["1d", "5d", "1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "10y", "max"]
 RANGE_LABELS = {"1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M", "ytd": "YTD", "1y": "1A",
                 "2y": "2A", "5y": "5A", "10y": "10A", "max": "Todo"}
+# imán al dibujar
+MAGNET_MODES = {"off": "Desactivado", "weak": "Débil (se pega si estás cerca de la vela)",
+                "strong": "Fuerte (siempre se pega a apertura, máximo, mínimo o cierre)"}
 # cuadrícula del fondo: (nombre, opacidad de las líneas)
 GRID_LEVELS = [("Sin cuadrícula", 0.0), ("Suave", 0.12), ("Media", 0.22), ("Fuerte", 0.4)]
 SHORTCUTS = [
@@ -439,6 +442,23 @@ class MainWindow(QtWidgets.QMainWindow):
             btn.setDefaultAction(acts[0])
             bar.addWidget(btn)
         self._tool_actions["cursor"].setChecked(True)
+        # imán: clic lo enciende/apaga; la flechita elige débil o fuerte
+        self.magnet_btn = QtWidgets.QToolButton()
+        self.magnet_btn.setText("🧲")
+        self.magnet_btn.setCheckable(True)
+        self.magnet_btn.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup)
+        self.magnet_btn.clicked.connect(self._toggle_magnet)
+        mmenu = QtWidgets.QMenu("Imán", self.magnet_btn)
+        mgroup = QtGui.QActionGroup(mmenu)
+        self._magnet_actions = {}
+        for mode, text in MAGNET_MODES.items():
+            act = mmenu.addAction(text, lambda m=mode: self._set_magnet(m))
+            act.setCheckable(True)
+            mgroup.addAction(act)
+            self._magnet_actions[mode] = act
+        self.magnet_btn.setMenu(mmenu)
+        bar.addWidget(self.magnet_btn)
+        self._set_magnet(self.cfg.get("magnet", "off"), save=False)
         bar.addSeparator()
         self.color_btn = QtWidgets.QToolButton()
         self.color_btn.setText("■")
@@ -468,6 +488,24 @@ class MainWindow(QtWidgets.QMainWindow):
         trash.setToolTip("Borrar todos los dibujos de este símbolo")
         trash.triggered.connect(self._clear_drawings)
         return bar
+
+    def _set_magnet(self, mode: str, save: bool = True):
+        if mode not in MAGNET_MODES:
+            mode = "off"
+        self.chart.layer.magnet = mode
+        self.magnet_btn.setChecked(mode != "off")
+        self._magnet_actions[mode].setChecked(True)
+        self.magnet_btn.setToolTip(f"Imán: {MAGNET_MODES[mode]}\nClic para encender/apagar · flechita para elegir el modo")
+        self.cfg["magnet"] = mode
+        if mode != "off":
+            self.cfg["magnet_last"] = mode
+        if save:
+            self._save()
+            self.statusBar().showMessage(f"Imán: {MAGNET_MODES[mode]}", 4000)
+
+    def _toggle_magnet(self):
+        on = self.chart.layer.magnet != "off"
+        self._set_magnet("off" if on else self.cfg.get("magnet_last", "weak"))
 
     def _on_tool(self, key):
         self.chart.layer.set_tool(key)
@@ -982,6 +1020,10 @@ class MainWindow(QtWidgets.QMainWindow):
                             keep_view=keep_view, title=self.symbol, log=self.log_scale.isChecked(),
                             comparisons=comps)
         self._update_alert_lines()
+        try:
+            self.chart.set_countdown(data.candle_end(self.df, self.meta, interval))
+        except Exception:  # noqa: BLE001 - sin cuenta regresiva si Yahoo no da el horario
+            self.chart.set_countdown(None)
         self._update_header(intraday)
         msg = f"{self.symbol} · {len(self.df)} velas · {interval} · actualizado {dt.datetime.now():%H:%M:%S}"
         if errors:

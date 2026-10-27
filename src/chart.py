@@ -324,6 +324,40 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         # etiquetas del cursor sobre los ejes: precio a la derecha y fecha abajo (como TradingView)
         self._ytag = self._make_tag()
         self._xtag = self._make_tag()
+        # cuenta regresiva al cierre de la vela actual, en la etiqueta del último precio
+        self._last_line = None
+        self._last_text = ""
+        self._candle_end = None
+        self._countdown = QtCore.QTimer(self, interval=1000)
+        self._countdown.timeout.connect(self._tick_countdown)
+        self._countdown.start()
+
+    def set_countdown(self, end):
+        """``end``: hora UTC (pd.Timestamp) en que cierra la vela actual, o None para no mostrarla."""
+        self._candle_end = end
+        self._tick_countdown()
+
+    def _tick_countdown(self):
+        line = self._last_line
+        if line is None:
+            return
+        text = self._last_text
+        if self._candle_end is not None:
+            secs = int((self._candle_end - pd.Timestamp.now(tz="UTC")).total_seconds())
+            if secs > 0:
+                d, rem = divmod(secs, 86400)
+                h, rem = divmod(rem, 3600)
+                m, s = divmod(rem, 60)
+                left = (f"{d}d {h:02d}:{m:02d}:{s:02d}" if d else f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}")
+                text = f"{text}\n{left}"
+            else:
+                self._candle_end = None  # la vela ya cerró: se quita hasta la próxima actualización
+        try:
+            if line.label.format != text:
+                line.label.setFormat(text)
+                line.label.valueChanged()
+        except RuntimeError:  # la línea ya no existe (se redibujó la gráfica)
+            self._last_line = None
 
     def _make_tag(self) -> QtWidgets.QLabel:
         tag = QtWidgets.QLabel(self)
@@ -513,6 +547,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 pass
         self.clear()
         self._hide_tags()
+        self._last_line = None
         self.plots, self._series, self._entries, self._labels, self._cross = [], {}, {}, {}, {}
         self._fixed = set()
         self._watermark = (None, None)
@@ -568,6 +603,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             label=f"{fmt_price(last)}  ({(last / pct_base - 1) * 100:+.2f}%)" if pct_base else fmt_price(last),
             labelOpts={"position": 0.985, "color": "#ffffff", "fill": lc, "anchors": [(1, 1), (1, 1)]})
         main.addItem(last_line, ignoreBounds=True)
+        self._last_line = last_line
+        self._last_text = last_line.label.format  # texto base; la cuenta regresiva se agrega abajo
+        self._candle_end = None
 
         if title:
             wm = pg.TextItem(title, color="#ffffff12", anchor=(0.5, 0.5))

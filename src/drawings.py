@@ -147,6 +147,7 @@ class DrawingLayer(QtCore.QObject):
         self.tool = "cursor"
         self.color = "#2962ff"
         self.width = 2
+        self.magnet = "off"  # "off" | "weak" | "strong"
         self.visible = True
         self.drawings: list[dict] = []
         self.main = None
@@ -261,7 +262,7 @@ class DrawingLayer(QtCore.QObject):
             return False
         if ev.button() != QtCore.Qt.LeftButton or self.tool == "cursor":
             return False
-        p = vb.mapSceneToView(ev.scenePos())
+        p = self._snap(vb, ev.scenePos())
         x, y = p.x(), p.y()
         t = self.tool
         if t == "eraser":
@@ -286,11 +287,36 @@ class DrawingLayer(QtCore.QObject):
             self._reset_tool()
         return True
 
+    MAGNET_PX = 12  # imán débil: distancia máxima (en píxeles) para pegarse a la vela
+
+    def _snap(self, vb, scene_pos) -> QtCore.QPointF:
+        """Punto en coordenadas de la vista, pegado a la apertura/máximo/mínimo/cierre más cercano
+        de la vela bajo el cursor si el imán está activo (débil: solo si está cerca; fuerte: siempre)."""
+        p = vb.mapSceneToView(scene_pos)
+        if self.magnet == "off" or self.tool in ("pen", "eraser") or self.df is None or not len(self.df):
+            return p
+        i = int(round(p.x()))
+        if not 0 <= i < len(self.df):  # zona sin velas (futuro): sin imán
+            return p
+        row = self.df.iloc[i]
+        best = None
+        for price in (row["Open"], row["High"], row["Low"], row["Close"]):
+            y = self.p2y(float(price))
+            if not np.isfinite(y):
+                continue
+            sp = vb.mapViewToScene(QtCore.QPointF(i, y))
+            dist = float(np.hypot(sp.x() - scene_pos.x(), sp.y() - scene_pos.y()))
+            if best is None or dist < best[0]:
+                best = (dist, y)
+        if best and (self.magnet == "strong" or best[0] <= self.MAGNET_PX):
+            return QtCore.QPointF(i, best[1])
+        return p
+
     def drag(self, vb, ev) -> bool:
         if not self._is_main(vb) or self.tool not in DRAG_TOOLS or ev.button() != QtCore.Qt.LeftButton:
             return False
-        a = vb.mapSceneToView(ev.buttonDownScenePos())
-        b = vb.mapSceneToView(ev.scenePos())
+        a = self._snap(vb, ev.buttonDownScenePos())
+        b = self._snap(vb, ev.scenePos())
         t = self.tool
         if ev.isStart():
             self._cancel_preview()

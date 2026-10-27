@@ -51,6 +51,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 - **Barra superior:** buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Alertas y ⟳ (actualizar).
 - **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
+- **Cuenta regresiva:** en intradía y diario, la etiqueta del último precio muestra cuánto falta para que cierre la vela actual, según el horario de cada mercado (cripto opera todo el día). Si el mercado está cerrado no se muestra.
 - **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
 - **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
@@ -74,6 +75,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas. Cada símbolo muestra debajo el nombre de la empresa o serie. Con clic derecho copias un símbolo a otra lista o creas una alerta.
 - **Dibujo** (barra vertical a la izquierda de la gráfica; se oculta y se muestra con **✎ Dibujo** en la barra superior, Ver → Herramientas de dibujo o Ctrl+D):
   - Herramientas agrupadas: cursor; líneas (horizontal, vertical, tendencia, rayo); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci manual; borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
+  - **Imán (🧲):** al dibujar, el punto se pega a la apertura, máximo, mínimo o cierre de la vela. En modo débil solo si estás cerca; en modo fuerte, siempre. Un clic en 🧲 lo enciende o apaga y la flechita elige el modo. No aplica al dibujo libre.
   - Con el cursor (↖) puedes mover y redimensionar lo dibujado. Clic derecho sobre un dibujo cambia el color o el grosor, o lo elimina.
   - Esc cancela la herramienta, Ctrl+Z deshace, 👁 oculta los dibujos y 🗑 los borra todos.
   - Se guardan por símbolo, anclados a fecha y precio, así que siguen en su lugar al cambiar el intervalo, el periodo o la escala log.
