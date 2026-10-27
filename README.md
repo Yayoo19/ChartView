@@ -51,6 +51,13 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 - **Barra superior:** buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Alertas y ⟳ (actualizar).
 - **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
+- **Panel de análisis** (📊 Análisis en la barra, Ver → Panel de análisis o Ctrl+E), para acciones con cobertura de analistas:
+  - Próximo reporte trimestral con su fecha, la utilidad por acción y los ingresos estimados.
+  - Historial de reportes: estimado contra real y sorpresa en %.
+  - Estimaciones del trimestre y año actual y siguiente.
+  - Recomendaciones de analistas (consenso y su cambio en 3 meses) y precio objetivo a 12 meses (bajo, promedio, alto) con el potencial contra el precio actual.
+  - Últimos cambios de calificación (EE.UU.) y la próxima fecha de dividendo.
+  - Datos de Yahoo Finance. Cripto, índices, materias primas y series macro no tienen esta información.
 - **Cuenta regresiva:** en intradía y diario, la etiqueta del último precio muestra cuánto falta para que cierre la vela actual, según el horario de cada mercado (cripto opera todo el día). Si el mercado está cerrado no se muestra.
 - **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
 - **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).

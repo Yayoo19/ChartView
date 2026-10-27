@@ -406,6 +406,86 @@ def lookup_names(symbols: list[str]) -> dict[str, str]:
     return out
 
 
+def _num(v):
+    """Número o None (para valores de pandas/yfinance que pueden venir como NaN)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
+
+
+def fundamentals(symbol: str) -> dict:
+    """Reportes trimestrales, estimaciones y opinión de analistas (Yahoo Finance).
+
+    Devuelve estructuras simples (listas y diccionarios) o {} si el símbolo no tiene cobertura
+    (cripto, índices, materias primas, series macro, ratios).
+    """
+    s = symbol.upper()
+    if (parse_expr(s) or macro.is_macro(s) or s.startswith("^") or s.endswith(("=F", "=X"))
+            or s in COMMODITIES or guess_market(s) == "Cripto"):
+        return {}  # sin cobertura de analistas: se responde al instante sin consultar a Yahoo
+    t = yf.Ticker(symbol)
+
+    def get(name):
+        try:
+            return getattr(t, name)
+        except Exception:
+            return None
+
+    out: dict = {}
+    today = pd.Timestamp.now().normalize()
+
+    ed = get("earnings_dates")
+    if ed is not None and not ed.empty:
+        rows = []
+        for ts, r in ed.iterrows():
+            d = pd.Timestamp(ts).tz_localize(None) if pd.Timestamp(ts).tzinfo else pd.Timestamp(ts)
+            rows.append({"date": d, "estimate": _num(r.get("EPS Estimate")), "reported": _num(r.get("Reported EPS")),
+                         "surprise": _num(r.get("Surprise(%)"))})
+        rows.sort(key=lambda x: x["date"], reverse=True)
+        out["history"] = [x for x in rows if x["reported"] is not None]
+        upcoming = [x for x in rows if x["reported"] is None and x["date"].normalize() >= today]
+        if upcoming:
+            out["next"] = upcoming[-1]  # el más cercano
+
+    def periods(df):
+        res = {}
+        if df is None or df.empty:
+            return res
+        for period, r in df.iterrows():
+            res[str(period)] = {k: (_num(r.get(k)) if k != "currency" else r.get(k)) for k in
+                                ("avg", "low", "high", "numberOfAnalysts", "growth", "yearAgoEps", "yearAgoRevenue", "currency")}
+        return res
+
+    out["eps_est"] = periods(get("earnings_estimate"))
+    out["rev_est"] = periods(get("revenue_estimate"))
+
+    targets = get("analyst_price_targets")
+    if isinstance(targets, dict) and targets:
+        out["targets"] = {k: _num(v) for k, v in targets.items()}
+
+    recs = get("recommendations_summary")
+    if recs is not None and not recs.empty:
+        out["recs"] = {str(r["period"]): {k: int(r.get(k) or 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")}
+                       for _, r in recs.iterrows()}
+
+    ud = get("upgrades_downgrades")
+    if ud is not None and not ud.empty:
+        out["changes"] = [{"date": pd.Timestamp(ts), "firm": r.get("Firm", ""), "to": r.get("ToGrade", ""),
+                           "from": r.get("FromGrade", ""), "action": r.get("Action", ""),
+                           "target": _num(r.get("currentPriceTarget")), "prior": _num(r.get("priorPriceTarget"))}
+                          for ts, r in ud.head(15).iterrows()]
+
+    cal = get("calendar")
+    if isinstance(cal, dict):
+        out["dividend"] = {"ex": cal.get("Ex-Dividend Date"), "pay": cal.get("Dividend Date")}
+    currency = next((v.get("currency") for v in out["eps_est"].values() if v.get("currency")), None)
+    out["currency"] = currency or ""
+    has_data = any(out.get(k) for k in ("history", "next", "eps_est", "targets", "recs", "changes"))
+    return out if has_data else {}
+
+
 def search(query: str) -> list[dict]:
     out = macro.search(query)  # catálogo macro primero; no requiere red
     try:

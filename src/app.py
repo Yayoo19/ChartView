@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import alerts, config, data, macro
 from .alerts_ui import AlertsWindow
+from .analysis import AnalysisPanel
 from .chart import CHART_TYPES, DOWN, UP, ChartWidget, fmt_change, fmt_price
 from .dialogs import CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
 from .drawings import TOOL_GROUPS, TOOLS
@@ -35,6 +36,7 @@ GRID_LEVELS = [("Sin cuadrícula", 0.0), ("Suave", 0.12), ("Media", 0.22), ("Fue
 SHORTCUTS = [
     ("Ctrl+L", "Ir al buscador de símbolos"), ("Ctrl+F", "Búsqueda avanzada"), ("F5", "Actualizar datos"),
     ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"), ("Ctrl+D", "Mostrar u ocultar herramientas de dibujo"),
+    ("Ctrl+E", "Mostrar u ocultar el panel de análisis"),
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
     ("Ctrl+Z", "Deshacer último dibujo"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
     ("Ctrl+G", "Encender o apagar la cuadrícula"), ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
@@ -100,6 +102,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_toolbar()
         self._build_center()
         self._build_watchlist()
+        self._build_analysis_dock()
         self._build_menu()
         self._build_shortcuts()
         self.statusBar().showMessage("Listo")
@@ -294,6 +297,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         v = mb.addMenu("&Ver")
         v.addAction(self.watch_dock.toggleViewAction())
+        v.addAction(self.analysis_dock.toggleViewAction())
         v.addAction(self.drawbar_act)
         v.addSeparator()
         v.addAction(self.log_scale)
@@ -611,8 +615,55 @@ class MainWindow(QtWidgets.QMainWindow):
         first = self.main_tb.actions()[0]
         self.main_tb.insertAction(first, toggle)
         self.main_tb.insertAction(first, self.drawbar_act)
-        self.main_tb.insertSeparator(first)
+        self._tb_sep = self.main_tb.insertSeparator(first)
         self._fill_watchlist_combo(self.cfg.get("active_watchlist"))
+
+    def _build_analysis_dock(self):
+        """Panel derecho con reportes trimestrales, estimaciones y opinión de analistas."""
+        dock = QtWidgets.QDockWidget("Análisis", self)
+        dock.setObjectName("analysis_dock")  # para guardar/restaurar si quedó abierto
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetClosable)
+        self.analysis = AnalysisPanel()
+        dock.setWidget(self.analysis)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+        self.analysis_dock = dock
+        self._fund_cache: dict = {}  # símbolo -> (hora, datos)
+        toggle = dock.toggleViewAction()
+        toggle.setText("Panel de análisis")
+        toggle.setIconText("📊 Análisis")
+        toggle.setToolTip("Reportes trimestrales y opinión de analistas (Ctrl+E)")
+        toggle.setShortcut(QtGui.QKeySequence("Ctrl+E"))
+        self.addAction(toggle)
+        self.main_tb.insertAction(self._tb_sep, toggle)
+        dock.visibilityChanged.connect(lambda on: self._refresh_analysis() if on else None)
+
+    def _refresh_analysis(self):
+        """Carga los datos del símbolo abierto (solo si el panel está visible; caché de 1 hora)."""
+        sym = self.symbol
+        if not sym or not self.analysis_dock.isVisible():
+            return
+        name = data.short_name(self.meta.get("longName") or self.meta.get("shortName") or "")
+        hit = self._fund_cache.get(sym)
+        if hit and dt.datetime.now().timestamp() - hit[0] < 3600:
+            self.analysis.set_data(sym, hit[1], name, self.last_price())
+            return
+        if self.analysis.symbol == sym and getattr(self, "_fund_loading", None) == sym:
+            return  # ya se está descargando
+        self._fund_loading = sym
+        self.analysis.set_loading(sym)
+
+        def done(d, sym=sym):
+            self._fund_cache[sym] = (dt.datetime.now().timestamp(), d)
+            self._fund_loading = None
+            if sym == self.symbol:
+                self.analysis.set_data(sym, d, name, self.last_price())
+
+        def fail(err, sym=sym):
+            self._fund_loading = None
+            if sym == self.symbol:
+                self.analysis.set_message(f"No se pudieron cargar los datos: {err}", sym)
+
+        run_task(data.fundamentals, sym, on_done=done, on_fail=fail)
 
     def _build_shortcuts(self):
         # el resto de los atajos están en las acciones del menú (_build_menu)
@@ -887,8 +938,11 @@ class MainWindow(QtWidgets.QMainWindow):
             if req != self._req:
                 return
             df, meta, used = res
+            changed = sym != self.symbol
             self.df, self.meta, self.symbol = df, meta, sym
             self._remember_name(sym, meta)
+            if changed or not silent:
+                self._refresh_analysis()
             if not silent and sym in getattr(self, "_watch_items", {}):
                 # el renglón de la lista muestra el mismo precio que la gráfica recién cargada
                 run_task(data.quotes, [sym], on_done=self._show_quotes)
