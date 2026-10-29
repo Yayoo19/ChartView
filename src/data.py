@@ -351,17 +351,44 @@ def load(symbol: str, interval_label: str, period: str):
     for col in ("Open", "High", "Low"):
         df[col] = df[col].fillna(df["Close"])
     df["Volume"] = df["Volume"].fillna(0)
+    try:
+        meta = dict(t.history_metadata or {})
+    except Exception:
+        meta = {}
+    if yi == "1d" and meta.get("instrumentType") == "CRYPTOCURRENCY":
+        df = _fill_crypto_days(t, df)
     if rule and rule.endswith("M"):
         df = _group_months(df, int(rule[:-1]))
     elif rule and rule.endswith("W"):
         df = _group_weeks(df, int(rule[:-1]))
     elif rule:
         df = df.resample(rule, origin="start_day").agg(_OHLCV).dropna(subset=["Close"])
-    try:
-        meta = dict(t.history_metadata or {})
-    except Exception:
-        meta = {}
     return df, meta, period
+
+
+def _fill_crypto_days(t, df: pd.DataFrame) -> pd.DataFrame:
+    """Rellena días faltantes al final de una serie diaria de cripto.
+
+    Durante las primeras horas tras la medianoche UTC (18:00 en México), Yahoo omite en el
+    diario la vela del día que acaba de cerrar y salta directo a la nueva. La cripto opera
+    todos los días, así que cualquier hueco reciente se reconstruye con velas de 1 hora.
+    """
+    tail = df.index[-4:]
+    expected = pd.date_range(tail[0], df.index[-1], freq="D")
+    missing = expected.difference(df.index)
+    if missing.empty:
+        return df
+    try:
+        h = t.history(period="5d", interval="60m", auto_adjust=False, actions=False)
+    except Exception:
+        return df
+    if h is None or h.empty:
+        return df
+    h = h[["Open", "High", "Low", "Close", "Volume"]].astype(float)
+    h.index = (h.index.tz_convert("UTC") if h.index.tz is not None else h.index).tz_localize(None)
+    days = h.resample("D").agg(_OHLCV).dropna(subset=["Close"])
+    days = days[days.index.isin(missing)]
+    return pd.concat([df, days]).sort_index() if not days.empty else df
 
 
 _CORP_SUFFIX = re.compile(
