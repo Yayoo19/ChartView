@@ -5,7 +5,6 @@ import datetime as dt
 from copy import deepcopy
 
 import numpy as np
-import pandas as pd
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import alerts, config, data, macro
@@ -33,7 +32,6 @@ RANGE_LABELS = {"1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M", "
 MAGNET_MODES = {"off": "Desactivado", "weak": "Débil (se pega si estás cerca de la vela)",
                 "strong": "Fuerte (siempre se pega a apertura, máximo, mínimo o cierre)"}
 # cuadrícula del fondo: (nombre, opacidad de las líneas)
-DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 GRID_LEVELS = [("Sin cuadrícula", 0.0), ("Suave", 0.12), ("Media", 0.22), ("Fuerte", 0.4)]
 SHORTCUTS = [
     ("Ctrl+L", "Ir al buscador de símbolos"), ("Ctrl+F", "Búsqueda avanzada"), ("F5", "Actualizar datos"),
@@ -366,17 +364,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.header = QtWidgets.QLabel("")
         self.header.setTextFormat(QtCore.Qt.RichText)
         self.header.setStyleSheet("font-size:15px; padding:4px 2px;")
-        # próximos cierres del día, la semana y el mes (hora local de la computadora)
-        self.closes = QtWidgets.QLabel("")
-        self.closes.setTextFormat(QtCore.Qt.RichText)
-        self.closes.setStyleSheet("font-size:12px; color:#787b86; padding:4px 2px;")
-        self.closes.setToolTip("Próximo cierre del día, la semana y el mes en tu hora local.\n"
-                               "En acciones se usa el horario regular de la bolsa y no se\n"
-                               "descuentan días festivos; en cripto, la medianoche UTC.")
-        self._closes = []
-        self._closes_timer = QtCore.QTimer(self, interval=1000)
-        self._closes_timer.timeout.connect(self._tick_closes)
-        self._closes_timer.start()
         self.info = QtWidgets.QLabel("")
         self.info.setTextFormat(QtCore.Qt.RichText)
         self.info.setStyleSheet("font-size:12px; padding:0 2px 4px 2px;")
@@ -395,10 +382,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.drawbar = self._build_drawbar()
         row.addWidget(self.drawbar)
         row.addWidget(self.chart, 1)
-        top = QtWidgets.QHBoxLayout()
-        top.addWidget(self.header, 1)
-        top.addWidget(self.closes)
-        lay.addLayout(top)
+        lay.addWidget(self.header)
         lay.addWidget(self.info)
         lay.addLayout(row, 1)
         lay.addWidget(self._build_rangebar())
@@ -1094,35 +1078,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.chart.set_countdown(data.candle_end(self.df, self.meta, interval))
         except Exception:  # noqa: BLE001 - sin cuenta regresiva si Yahoo no da el horario
             self.chart.set_countdown(None)
-        try:
-            self._closes = data.period_closes(self.meta)
-        except Exception:  # noqa: BLE001
-            self._closes = []
-        self._tick_closes()
         self._update_header(intraday)
         msg = f"{self.symbol} · {len(self.df)} velas · {interval} · actualizado {dt.datetime.now():%H:%M:%S}"
         if errors:
             msg += "  ·  Errores: " + "; ".join(errors)
         self.statusBar().showMessage(msg)
-
-    def _tick_closes(self):
-        """Actualiza el tiempo restante de los próximos cierres (cada segundo)."""
-        now = pd.Timestamp.now(tz="UTC")
-        parts = []
-        for name, end in self._closes:
-            secs = int((end - now).total_seconds())
-            if secs <= 0:
-                continue
-            d, rem = divmod(secs, 86400)
-            h, rem = divmod(rem, 3600)
-            m, sec = divmod(rem, 60)
-            left = f"{d}d {h}h" if d else f"{h}h {m:02d}m" if h else f"{m:02d}:{sec:02d}"
-            when = end.to_pydatetime().astimezone()
-            parts.append(f"{name.lower()} <span style='color:#d1d4dc'>{DAYS[when.weekday()]} {when:%d/%m %H:%M}</span>"
-                         f" <span style='color:#2962ff'>({left})</span>")
-        text = ("Cierre&nbsp; " + " &nbsp;·&nbsp; ".join(parts)) if parts else ""
-        if self.closes.text() != text:
-            self.closes.setText(text)
 
     def _update_header(self, intraday):
         m, df = self.meta, self.df

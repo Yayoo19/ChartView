@@ -351,43 +351,6 @@ def candle_end(df: pd.DataFrame, meta: dict, interval_label: str):
     return end if end > now else None
 
 
-def period_closes(meta: dict) -> list:
-    """Próximo cierre del día, la semana y el mes: [(nombre, hora UTC)], o [] si no aplica.
-
-    En cripto los periodos terminan a medianoche UTC; en acciones, con la sesión regular
-    del último día hábil (lunes a viernes, sin contar días festivos).
-    """
-    tz, reg_start, reg_end = _session(meta)
-    if not tz:
-        return []
-    now = pd.Timestamp.now(tz="UTC")
-    if meta.get("instrumentType") == "CRYPTOCURRENCY":
-        today = now.normalize()
-        day = today + pd.Timedelta(days=1)
-        week = today + pd.Timedelta(days=7 - today.weekday())
-        month = today + pd.offsets.MonthBegin(1)
-        return [("Día", day), ("Semana", week), ("Mes", month)]
-    if reg_end is None:
-        return []
-    local = now.tz_convert(tz).tz_localize(None).normalize()
-
-    def next_close(last_day):
-        """Cierre del periodo cuyo último día es ``last_day(fecha)``; si ya pasó, el siguiente."""
-        d = local
-        for _ in range(3):
-            end = _close_on(_last_weekday(last_day(d)), reg_end, tz)
-            if not pd.isna(end) and end > now:
-                return end.tz_convert("UTC")
-            d = last_day(d) + pd.Timedelta(days=1)
-        return None
-
-    out = [("Día", next_close(lambda d: d if d.weekday() < 5 else d + pd.Timedelta(days=7 - d.weekday()))),
-           ("Semana", next_close(lambda d: d + pd.Timedelta(days=4 - d.weekday()) if d.weekday() < 5
-                                 else d + pd.Timedelta(days=11 - d.weekday()))),
-           ("Mes", next_close(lambda d: d + pd.offsets.MonthEnd(0)))]
-    return [(k, v) for k, v in out if v is not None]
-
-
 def load_closes(symbols: list[str], index: pd.DatetimeIndex, interval_label: str, period: str) -> dict:
     """Cierres de otros símbolos alineados a ``index`` (para comparar). {símbolo: array | mensaje de error}."""
     out = {}
