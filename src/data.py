@@ -268,15 +268,53 @@ def _load_expr(expr, interval_label: str, period: str):
     return df, meta, used
 
 
+def _span(rule, yi, start: pd.Timestamp) -> pd.DateOffset:
+    """Duración de una vela de varios días que empieza en ``start``."""
+    if rule and rule.endswith("M"):
+        return pd.DateOffset(months=int(rule[:-1]))
+    if rule and rule.endswith("W"):
+        return pd.DateOffset(weeks=int(rule[:-1]))
+    return {"1d": pd.DateOffset(days=1), "1wk": pd.DateOffset(weeks=1)}.get(yi, pd.DateOffset(months=1))
+
+
+def _last_weekday(d: pd.Timestamp) -> pd.Timestamp:
+    while d.weekday() >= 5:
+        d -= pd.Timedelta(days=1)
+    return d
+
+
+def _session(meta: dict):
+    """(zona horaria, inicio, fin) de la sesión regular que informa Yahoo, o Nones."""
+    tz = meta.get("exchangeTimezoneName")
+    reg = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
+
+    def ts(key):
+        if not tz or reg.get(key) is None:
+            return None
+        t = pd.Timestamp(reg[key])
+        return (t.tz_localize(tz) if t.tzinfo is None else t).tz_convert(tz)
+
+    return tz, ts("start"), ts("end")
+
+
+def _close_on(day: pd.Timestamp, reg_end: pd.Timestamp, tz: str) -> pd.Timestamp:
+    """Hora de cierre de la sesión del día ``day``, con el horario de ``reg_end``."""
+    if reg_end.date() == day.date():
+        return reg_end  # la sesión de hoy puede cerrar antes (días de medio horario)
+    clock = reg_end.tz_localize(None) - reg_end.tz_localize(None).normalize()
+    return (pd.Timestamp(day.date()) + clock).tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
+
+
 def candle_end(df: pd.DataFrame, meta: dict, interval_label: str):
     """Hora (UTC) en que cierra la vela actual, o None si ya cerró o el mercado está cerrado.
 
-    Solo intervalos intradía y diario. Usa la zona horaria de la bolsa y el horario regular
-    del día que informa Yahoo (p. ej. Nueva York 9:30–16:00; cripto todo el día).
+    Usa la zona horaria de la bolsa y el horario regular que informa Yahoo (p. ej. Nueva York
+    9:30–16:00; cripto todo el día). Las velas de varios días (semana, mes…) cierran con la
+    última sesión hábil de su periodo; no se descuentan días festivos.
     """
     yi, rule, intraday, _ = INTERVALS[interval_label]
-    tz = meta.get("exchangeTimezoneName")
-    if df is None or df.empty or not tz or not (intraday or interval_label == "1 día"):
+    tz, reg_start, reg_end = _session(meta)
+    if df is None or df.empty or not tz:
         return None
     try:
         last = df.index[-1].tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
@@ -285,21 +323,20 @@ def candle_end(df: pd.DataFrame, meta: dict, interval_label: str):
     if pd.isna(last):
         return None
     crypto = meta.get("instrumentType") == "CRYPTOCURRENCY"
-    reg = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
-
-    def ts(key):
-        if reg.get(key) is None:
-            return None
-        t = pd.Timestamp(reg[key])
-        return t.tz_localize(tz) if t.tzinfo is None else t
-
-    reg_start, reg_end = ts("start"), ts("end")
     now = pd.Timestamp.now(tz="UTC")
-    if not crypto and (reg_start is None or reg_end is None or not reg_start <= now < reg_end):
-        return None  # mercado cerrado: no hay vela abierta
-    if interval_label == "1 día":
-        end = last + pd.Timedelta(days=1) if crypto else reg_end
+    if not intraday:
+        if crypto:
+            end = (last.tz_localize(None) + _span(rule, yi, last)).tz_localize(tz)
+        elif reg_end is None:
+            return None
+        else:
+            day = _last_weekday(last.tz_localize(None) + _span(rule, yi, last) - pd.Timedelta(days=1))
+            end = _close_on(day, reg_end, tz)
+            if pd.isna(end):
+                return None
     else:
+        if not crypto and (reg_start is None or reg_end is None or not reg_start <= now < reg_end):
+            return None  # mercado cerrado: no hay vela abierta
         step = pd.Timedelta(minutes=240 if rule == "4h" else int(yi[:-1]))
         end = last + step
         if end <= now:
@@ -312,6 +349,43 @@ def candle_end(df: pd.DataFrame, meta: dict, interval_label: str):
             end = min(end, reg_end)  # la última vela del día cierra con el mercado
     end = end.tz_convert("UTC")
     return end if end > now else None
+
+
+def period_closes(meta: dict) -> list:
+    """Próximo cierre del día, la semana y el mes: [(nombre, hora UTC)], o [] si no aplica.
+
+    En cripto los periodos terminan a medianoche UTC; en acciones, con la sesión regular
+    del último día hábil (lunes a viernes, sin contar días festivos).
+    """
+    tz, reg_start, reg_end = _session(meta)
+    if not tz:
+        return []
+    now = pd.Timestamp.now(tz="UTC")
+    if meta.get("instrumentType") == "CRYPTOCURRENCY":
+        today = now.normalize()
+        day = today + pd.Timedelta(days=1)
+        week = today + pd.Timedelta(days=7 - today.weekday())
+        month = today + pd.offsets.MonthBegin(1)
+        return [("Día", day), ("Semana", week), ("Mes", month)]
+    if reg_end is None:
+        return []
+    local = now.tz_convert(tz).tz_localize(None).normalize()
+
+    def next_close(last_day):
+        """Cierre del periodo cuyo último día es ``last_day(fecha)``; si ya pasó, el siguiente."""
+        d = local
+        for _ in range(3):
+            end = _close_on(_last_weekday(last_day(d)), reg_end, tz)
+            if not pd.isna(end) and end > now:
+                return end.tz_convert("UTC")
+            d = last_day(d) + pd.Timedelta(days=1)
+        return None
+
+    out = [("Día", next_close(lambda d: d if d.weekday() < 5 else d + pd.Timedelta(days=7 - d.weekday()))),
+           ("Semana", next_close(lambda d: d + pd.Timedelta(days=4 - d.weekday()) if d.weekday() < 5
+                                 else d + pd.Timedelta(days=11 - d.weekday()))),
+           ("Mes", next_close(lambda d: d + pd.offsets.MonthEnd(0)))]
+    return [(k, v) for k, v in out if v is not None]
 
 
 def load_closes(symbols: list[str], index: pd.DatetimeIndex, interval_label: str, period: str) -> dict:

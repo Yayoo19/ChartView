@@ -58,7 +58,8 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
   - Recomendaciones de analistas (consenso y su cambio en 3 meses) y precio objetivo a 12 meses (bajo, promedio, alto) con el potencial contra el precio actual.
   - Últimos cambios de calificación (EE.UU.) y la próxima fecha de dividendo.
   - Datos de Yahoo Finance. Cripto, índices, materias primas y series macro no tienen esta información.
-- **Cuenta regresiva:** en intradía y diario, la etiqueta del último precio muestra cuánto falta para que cierre la vela actual, según el horario de cada mercado (cripto opera todo el día). Si el mercado está cerrado no se muestra.
+- **Cuenta regresiva:** en todos los intervalos, la etiqueta del último precio muestra cuánto falta para que cierre la vela actual, según el horario de cada mercado (cripto opera todo el día y cierra a la medianoche UTC). Las velas de semana, mes o más cierran con la última sesión hábil de su periodo. Si la vela ya cerró (mercado cerrado) no se muestra.
+- **Próximos cierres:** arriba a la derecha se ve cuándo cierran el día, la semana y el mes en tu hora local, con el tiempo restante. No se descuentan días festivos.
 - **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
 - **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
