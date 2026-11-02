@@ -1,8 +1,9 @@
-"""Herramientas de dibujo sobre la gráfica de precio.
+"""Herramientas de dibujo sobre la gráfica de precio y los paneles de indicadores.
 
 Los dibujos se guardan en coordenadas de mercado (fecha en segundos epoch y
 precio real), así sobreviven a cambios de intervalo, de periodo o de escala
 logarítmica. La capa los traduce a coordenadas de la vista al dibujarlos.
+Los de un panel llevan la clave ``pane`` (p. ej. "rsi#1") y guardan el valor del indicador.
 """
 from __future__ import annotations
 
@@ -155,6 +156,7 @@ class DrawingLayer(QtCore.QObject):
         self.drawings: list[dict] = []
         self.main = None
         self.panes: list = []
+        self._pane_plots: dict = {}  # clave del panel -> gráfica
         self.df = None
         self.log = False
         self._ts = np.array([])
@@ -201,6 +203,7 @@ class DrawingLayer(QtCore.QObject):
         """
         self.main, self.panes, self.df, self.log = main, panes, df, log
         self.pct_base = pct_base
+        self._pane_plots = {self.chart._pane_key[p]: p for p in panes}
         self._ts = df.index.values.astype("datetime64[s]").astype(np.int64).astype(float)
         self._step = float(np.median(np.diff(self._ts))) if len(self._ts) > 1 else 86400.0
         self._items, self._owner, self._preview = {}, {}, None
@@ -241,18 +244,28 @@ class DrawingLayer(QtCore.QObject):
             return float(self.pct_base * (1 + y / 100))
         return float(10 ** y) if self.log else float(y)
 
-    def to_view(self, pt):
-        return self.t2x(pt[0]), self.p2y(pt[1])
+    def to_view(self, pt, pane=None):
+        return self.t2x(pt[0]), float(pt[1]) if pane else self.p2y(pt[1])
 
-    def to_market(self, x, y):
-        return [float(self.x2t(x)), self.y2p(y)]
+    def to_market(self, x, y, pane=None):
+        return [float(self.x2t(x)), float(y) if pane else self.y2p(y)]
 
     # ------------------------------------------------------------ eventos
-    def _is_main(self, vb):
-        return self.main is not None and vb is self.main.getViewBox()
+    def _target(self, vb):
+        """(se puede dibujar aquí, clave del panel o None si es la gráfica de precio)."""
+        if self.main is not None and vb is self.main.getViewBox():
+            return True, None
+        for key, plot in self._pane_plots.items():
+            if plot.getViewBox() is vb:
+                return True, key
+        return False, None
+
+    def _plot(self, pane):
+        return self._pane_plots.get(pane) if pane else self.main
 
     def click(self, vb, ev) -> bool:
-        if not self._is_main(vb):
+        ok, pane = self._target(vb)
+        if not ok:
             return False
         if ev.button() == QtCore.Qt.RightButton:
             did = self._hit(ev.scenePos())
@@ -265,7 +278,7 @@ class DrawingLayer(QtCore.QObject):
             return False
         if ev.button() != QtCore.Qt.LeftButton or self.tool == "cursor":
             return False
-        p = self._snap(vb, ev.scenePos())
+        p = self._snap(vb, ev.scenePos(), pane)
         x, y = p.x(), p.y()
         t = self.tool
         if t == "eraser":
@@ -274,15 +287,16 @@ class DrawingLayer(QtCore.QObject):
                 self.remove(did)
             return True
         if t == "hline":
-            self._add({"type": "hline", "points": [self.to_market(x, y)]})
+            self._add({"type": "hline", "points": [self.to_market(x, y, pane)]}, pane)
         elif t == "vline":
-            self._add({"type": "vline", "points": [self.to_market(x, y)]})
+            # una fecha cruza todos los paneles: se guarda en la gráfica de precio, a media altura
+            self._add({"type": "vline", "points": [self.to_market(x, sum(self.main.getViewBox().viewRange()[1]) / 2)]})
         elif t == "text":
             text, ok = QtWidgets.QInputDialog.getMultiLineText(self.chart, "Texto", "Escribe el texto:")
             if ok and text.strip():
-                self._add({"type": "text", "points": [self.to_market(x, y)], "text": text})
+                self._add({"type": "text", "points": [self.to_market(x, y, pane)], "text": text}, pane)
         elif t == "image":
-            self._place_image(vb, x, y)
+            self._place_image(vb, x, y, pane=pane)
         else:
             self.message.emit("Mantén presionado el botón y arrastra para dibujar.")
             return True
@@ -292,19 +306,24 @@ class DrawingLayer(QtCore.QObject):
 
     MAGNET_PX = 12  # imán débil: distancia máxima (en píxeles) para pegarse a la vela
 
-    def _snap(self, vb, scene_pos) -> QtCore.QPointF:
+    def _snap(self, vb, scene_pos, pane=None) -> QtCore.QPointF:
         """Punto en coordenadas de la vista, pegado a la apertura/máximo/mínimo/cierre más cercano
-        de la vela bajo el cursor si el imán está activo (débil: solo si está cerca; fuerte: siempre)."""
+        de la vela bajo el cursor (en un panel, a las líneas del indicador) si el imán está activo
+        (débil: solo si está cerca; fuerte: siempre)."""
         p = vb.mapSceneToView(scene_pos)
         if self.magnet == "off" or self.tool in ("pen", "eraser") or self.df is None or not len(self.df):
             return p
         i = int(round(p.x()))
         if not 0 <= i < len(self.df):  # zona sin velas (futuro): sin imán
             return p
-        row = self.df.iloc[i]
+        if pane:
+            values = [float(ys[j]) for xs, ys in self.chart._series.get(self._plot(pane), [])
+                      for j in np.flatnonzero(xs == i)]
+        else:
+            row = self.df.iloc[i]
+            values = [self.p2y(float(row[k])) for k in ("Open", "High", "Low", "Close")]
         best = None
-        for price in (row["Open"], row["High"], row["Low"], row["Close"]):
-            y = self.p2y(float(price))
+        for y in values:
             if not np.isfinite(y):
                 continue
             sp = vb.mapViewToScene(QtCore.QPointF(i, y))
@@ -316,17 +335,19 @@ class DrawingLayer(QtCore.QObject):
         return p
 
     def drag(self, vb, ev) -> bool:
-        if not self._is_main(vb) or self.tool not in DRAG_TOOLS or ev.button() != QtCore.Qt.LeftButton:
+        ok, pane = self._target(vb)
+        if not ok or self.tool not in DRAG_TOOLS or ev.button() != QtCore.Qt.LeftButton:
             return False
-        a = self._snap(vb, ev.buttonDownScenePos())
-        b = self._snap(vb, ev.scenePos())
+        a = self._snap(vb, ev.buttonDownScenePos(), pane)
+        b = self._snap(vb, ev.scenePos(), pane)
         t = self.tool
         if ev.isStart():
             self._cancel_preview()
             pen = pg.mkPen(self.color, width=self.width, style=QtCore.Qt.DashLine if t != "pen" else QtCore.Qt.SolidLine)
             self._preview = pg.PlotCurveItem(pen=pen)
             self._preview.setZValue(60)
-            self.main.addItem(self._preview, ignoreBounds=True)
+            self._preview_plot = self._plot(pane)
+            self._preview_plot.addItem(self._preview, ignoreBounds=True)
             self._pen_pts = [(a.x(), a.y())]
         if self._preview is None:
             return True
@@ -342,14 +363,14 @@ class DrawingLayer(QtCore.QObject):
             self._preview.setData(np.array([a.x(), b.x()]), np.array([a.y(), b.y()]))
         if ev.isFinish():
             self._cancel_preview()
-            p1, p2 = self.to_market(a.x(), a.y()), self.to_market(b.x(), b.y())
+            p1, p2 = self.to_market(a.x(), a.y(), pane), self.to_market(b.x(), b.y(), pane)
             if t == "pen":
                 if len(self._pen_pts) > 1:
-                    self._add({"type": "pen", "points": [self.to_market(x, y) for x, y in self._pen_pts]})
+                    self._add({"type": "pen", "points": [self.to_market(x, y, pane) for x, y in self._pen_pts]}, pane)
             elif t == "image":
-                self._place_image(vb, a.x(), a.y(), b.x(), b.y())
+                self._place_image(vb, a.x(), a.y(), b.x(), b.y(), pane)
             else:
-                self._add({"type": t, "points": [p1, p2]})
+                self._add({"type": t, "points": [p1, p2]}, pane)
             if t not in STICKY_TOOLS:
                 self._reset_tool()
         return True
@@ -361,13 +382,15 @@ class DrawingLayer(QtCore.QObject):
     def _cancel_preview(self):
         if self._preview is not None:
             try:
-                self.main.removeItem(self._preview)
+                self._preview_plot.removeItem(self._preview)
             except (RuntimeError, AttributeError):
                 pass
             self._preview = None
 
     # ------------------------------------------------------------- edición
-    def _add(self, d):
+    def _add(self, d, pane=None):
+        if pane:
+            d["pane"] = pane
         d.setdefault("color", self.color)
         d.setdefault("width", self.width)
         d["id"] = uuid.uuid4().hex
@@ -389,8 +412,11 @@ class DrawingLayer(QtCore.QObject):
         self.changed.emit()
 
     def undo(self):
-        if self.drawings:
-            self.remove(self.drawings[-1]["id"])
+        # el último que se ve: los de un indicador que ya no está en la gráfica no se tocan a ciegas
+        for d in reversed(self.drawings):
+            if d["id"] in self._items:
+                self.remove(d["id"])
+                return
 
     def clear(self):
         for did in list(self._items):
@@ -421,7 +447,7 @@ class DrawingLayer(QtCore.QObject):
         if d is None:
             return
         m = QtWidgets.QMenu(self.chart)
-        if d["type"] == "hline":
+        if d["type"] == "hline" and not d.get("pane"):
             m.addAction("🔔 Crear alerta en este precio", lambda: self.alertRequested.emit(float(d["points"][0][1])))
             m.addSeparator()
         m.addAction("Cambiar color…", lambda: self._recolor(d))
@@ -450,7 +476,7 @@ class DrawingLayer(QtCore.QObject):
         self._render(d)
         self.changed.emit()
 
-    def _place_image(self, vb, x1, y1, x2=None, y2=None):
+    def _place_image(self, vb, x1, y1, x2=None, y2=None, pane=None):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self.chart, "Elegir imagen", "", "Imágenes (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.svg)")
         if not path:
@@ -469,7 +495,8 @@ class DrawingLayer(QtCore.QObject):
             w = (vx1 - vx0) / 5
             h = w / px_w * (img.height() / img.width()) * px_h
             x2, y2 = x1 + w, y1 - h
-        self._add({"type": "image", "points": [self.to_market(x1, y1), self.to_market(x2, y2)], "image": str(dest)})
+        self._add({"type": "image", "points": [self.to_market(x1, y1, pane), self.to_market(x2, y2, pane)],
+                   "image": str(dest)}, pane)
 
     # ----------------------------------------------------------- render
     def render_all(self):
@@ -501,10 +528,15 @@ class DrawingLayer(QtCore.QObject):
         if self.main is None:
             return
         did, t = d["id"], d["type"]
+        pane = d.get("pane")
+        plot = self._plot(pane)
+        if plot is None:
+            return  # el indicador no está en la gráfica: el dibujo se conserva para cuando vuelva
+        y2p, p2y = (float, float) if pane else (self.y2p, self.p2y)
         color, width = d.get("color", self.color), d.get("width", self.width)
         pen = pg.mkPen(color, width=width)
         hover = pg.mkPen(color, width=width + 2)
-        pts = [self.to_view(p) for p in d["points"]]
+        pts = [self.to_view(p, pane) for p in d["points"]]
         if any(not np.isfinite(v) for p in pts for v in p):
             return
 
@@ -516,13 +548,13 @@ class DrawingLayer(QtCore.QObject):
                                               "anchors": [(0, 1), (0, 1)]})
 
             def moved(ln=line):
-                ln.label.setFormat(_fmt(self.y2p(ln.value())))
+                ln.label.setFormat(_fmt(y2p(ln.value())))
                 ln.label.valueChanged()
 
             line.sigPositionChanged.connect(lambda *_: moved())
             line.sigPositionChangeFinished.connect(
-                lambda ln: self._commit(d, [[d["points"][0][0], self.y2p(ln.value())]]))
-            self._own(did, line)
+                lambda ln: self._commit(d, [[d["points"][0][0], y2p(ln.value())]]))
+            self._own(did, line, plot)
 
         elif t == "vline":
             line = pg.InfiniteLine(pos=pts[0][0], angle=90, movable=True, pen=pen, hoverPen=hover)
@@ -535,9 +567,9 @@ class DrawingLayer(QtCore.QObject):
 
         elif t in ("trend", "ray"):
             roi = pg.LineSegmentROI(pts, pen=pen, hoverPen=hover, handlePen=pg.mkPen(color))
-            self._own(did, roi)
+            self._own(did, roi, plot)
             if t == "ray":
-                ext = self._own(did, pg.PlotCurveItem(pen=pg.mkPen(color, width=width)))
+                ext = self._own(did, pg.PlotCurveItem(pen=pg.mkPen(color, width=width)), plot)
 
                 def update_ray(r=roi, e=ext):
                     (x1, y1), (x2, y2) = self._roi_points(r)
@@ -550,7 +582,7 @@ class DrawingLayer(QtCore.QObject):
                 roi.sigRegionChanged.connect(lambda *_: update_ray())
                 update_ray()
             roi.sigRegionChangeFinished.connect(
-                lambda r: self._commit(d, [self.to_market(x, y) for x, y in self._roi_points(r)]))
+                lambda r: self._commit(d, [self.to_market(x, y, pane) for x, y in self._roi_points(r)]))
 
         elif t in ("rect", "ellipse", "image"):
             (x1, y1), (x2, y2) = pts
@@ -560,20 +592,20 @@ class DrawingLayer(QtCore.QObject):
                 if img is None:
                     return
             roi = ShapeROI((min(x1, x2), min(y1, y2)), (abs(x2 - x1), abs(y2 - y1)), t, color, width, img)
-            self._own(did, roi)
+            self._own(did, roi, plot)
 
             def fin(r):
                 pos, size = r.pos(), r.size()
                 a = (pos.x(), pos.y())
                 b = (pos.x() + size.x(), pos.y() + size.y())
-                self._commit(d, [self.to_market(*a), self.to_market(*b)])
+                self._commit(d, [self.to_market(*a, pane), self.to_market(*b, pane)])
 
             roi.sigRegionChangeFinished.connect(fin)
 
         elif t == "pen":
             xs, ys = np.array([p[0] for p in pts]), np.array([p[1] for p in pts])
             item = pg.PlotCurveItem(xs, ys, pen=pen)
-            self._own(did, item)
+            self._own(did, item, plot)
 
         elif t == "text":
             size = 9 + 2 * width
@@ -583,33 +615,33 @@ class DrawingLayer(QtCore.QObject):
             f.setBold(width >= 3)
             item.setFont(f)
             item.setPos(*pts[0])
-            item.sigMoved.connect(lambda it: self._commit(d, [self.to_market(it.pos().x(), it.pos().y())]))
-            self._own(did, item)
+            item.sigMoved.connect(lambda it: self._commit(d, [self.to_market(it.pos().x(), it.pos().y(), pane)]))
+            self._own(did, item, plot)
 
         elif t == "fib":
             roi = pg.LineSegmentROI(pts, pen=pg.mkPen(color, width=1, style=QtCore.Qt.DashLine),
                                     hoverPen=hover, handlePen=pg.mkPen(color))
-            self._own(did, roi)
+            self._own(did, roi, plot)
             levels = []
             for r, c in FIB_LEVELS:
-                ln = self._own(did, pg.PlotCurveItem(pen=pg.mkPen(c, width=1)))
-                tx = self._own(did, pg.TextItem("", color=c, anchor=(1, 1)))
+                ln = self._own(did, pg.PlotCurveItem(pen=pg.mkPen(c, width=1)), plot)
+                tx = self._own(did, pg.TextItem("", color=c, anchor=(1, 1)), plot)
                 levels.append((r, ln, tx))
 
             def update_fib(rr=roi):
                 (x1, y1), (x2, y2) = self._roi_points(rr)
-                p1, p2 = self.y2p(y1), self.y2p(y2)
+                p1, p2 = y2p(y1), y2p(y2)
                 xa, xb = min(x1, x2), max(x1, x2)
                 for r, ln, tx in levels:
                     price = p2 - (p2 - p1) * r
-                    yv = self.p2y(price)
+                    yv = p2y(price)
                     ln.setData(np.array([xa, xb]), np.array([yv, yv]))
                     tx.setText(f"{r * 100:g}%  ({_fmt(price)})")
                     tx.setPos(xb, yv)
 
             roi.sigRegionChanged.connect(lambda *_: update_fib())
             roi.sigRegionChangeFinished.connect(
-                lambda r: self._commit(d, [self.to_market(x, y) for x, y in self._roi_points(r)]))
+                lambda r: self._commit(d, [self.to_market(x, y, pane) for x, y in self._roi_points(r)]))
             update_fib()
 
     @staticmethod
