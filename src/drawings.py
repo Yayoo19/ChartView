@@ -81,6 +81,9 @@ class DrawViewBox(pg.ViewBox):
             return
         super().mouseDragEvent(ev, axis)
 
+    def wheelEvent(self, ev, axis=None):
+        super().wheelEvent(ev, 0 if axis is None else axis)  # la rueda sobre la gráfica solo acerca en horizontal
+
 
 class ShapeROI(pg.ROI):
     """Rectángulo, elipse o imagen redimensionable con relleno."""

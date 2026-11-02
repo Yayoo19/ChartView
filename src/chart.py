@@ -27,6 +27,11 @@ _STYLES = {"solid": QtCore.Qt.SolidLine, "dash": QtCore.Qt.DashLine, "dot": QtCo
 # --------------------------------------------------------------------------- #
 # Formato de números
 # --------------------------------------------------------------------------- #
+DIVIDER_GRAB = 4      # píxeles alrededor del borde entre paneles donde se puede arrastrar
+MIN_PANE_HEIGHT = 50
+DEFAULT_PANE_FRACTION = 0.12  # panel nuevo cuando las alturas ya se ajustaron a mano
+
+
 def fmt_price(v) -> str:
     if v is None or not np.isfinite(v):
         return "—"
@@ -303,6 +308,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     hovered = QtCore.Signal(str)
     legendAction = QtCore.Signal(str, int)  # ("cfg" | "hide" | "del", índice del indicador)
     compareRemoved = QtCore.Signal(str)     # ✕ en una comparación de la leyenda
+    panesResized = QtCore.Signal()          # cambió la altura de los paneles (para guardarla)
+    pane_heights: dict = {}  # valor de clase: pyqtgraph llama a resizeEvent antes de terminar __init__
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -319,6 +326,14 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._intraday = False
         self.default_bars = 150
         self.grid_alpha = 0.22  # opacidad de la cuadrícula del fondo (0 = sin cuadrícula)
+        # ajuste manual de los paneles inferiores; se guarda por indicador porque la gráfica
+        # se reconstruye en cada actualización
+        self.pane_heights: dict = {}   # fracción de la altura de cada fila ("main" = precio)
+        self._pane_y: dict = {}        # escala vertical elegida a mano por panel
+        self._pane_key: dict = {}
+        self._pane_default: dict = {}  # escala propia del indicador (RSI 0-100…)
+        self._manual: set = set()
+        self._drag = None
         self.scene().sigMouseMoved.connect(self._on_mouse)
         self.layer = DrawingLayer(self)
         # etiquetas del cursor sobre los ejes: precio a la derecha y fecha abajo (como TradingView)
@@ -358,6 +373,156 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 line.label.valueChanged()
         except RuntimeError:  # la línea ya no existe (se redibujó la gráfica)
             self._last_line = None
+
+    # ------------------------------------------------------- paneles a mano
+    def _zone_at(self, pos):
+        """Qué hay bajo el cursor: ("divider", fila), ("axis", panel) o None."""
+        if len(self.plots) < 2:
+            return None
+        pos = pos.toPoint()
+        for row, p in enumerate(self.plots[1:]):
+            bottom = self.mapFromScene(self.plots[row].getViewBox().sceneBoundingRect().bottomLeft()).y()
+            top = self.mapFromScene(p.getViewBox().sceneBoundingRect().topLeft()).y()
+            if abs(pos.y() - (top + bottom) / 2) <= DIVIDER_GRAB:
+                return "divider", row
+        for p in self.plots[1:]:
+            if self._axis_rect(p.getAxis("right")).contains(pos):
+                return "axis", p
+        return None
+
+    def _set_pane_range(self, plot, lo: float, hi: float):
+        self._manual.add(plot)
+        plot.getViewBox().setMouseEnabled(x=True, y=True)  # con escala manual, arrastrar también la mueve en vertical
+        plot.setYRange(lo, hi, padding=0)
+        self._pane_y[self._pane_key[plot]] = (lo, hi)
+
+    def _on_pane_yrange(self, plot):
+        if plot in self._manual and plot in self._pane_key:
+            self._pane_y[self._pane_key[plot]] = tuple(plot.getViewBox().viewRange()[1])
+
+    def _reset_pane(self, plot):
+        """Devuelve el panel a su escala automática."""
+        self._manual.discard(plot)
+        self._pane_y.pop(self._pane_key.get(plot), None)
+        plot.getViewBox().setMouseEnabled(x=True, y=False)
+        if plot in self._pane_default:
+            plot.setYRange(*self._pane_default[plot], padding=0)
+        else:
+            self._on_xrange()
+
+    def _row_keys(self) -> list:
+        return [self._pane_key.get(p, "main") for p in self.plots]
+
+    def _apply_heights(self):
+        """Reparte la altura: por defecto el precio ocupa más; ajustada a mano, en píxeles exactos
+        (el reparto proporcional de Qt movería también los paneles que no se tocaron)."""
+        lay = self.ci.layout
+        for row in range(lay.rowCount()):
+            lay.setRowMinimumHeight(row, 0)
+            lay.setRowMaximumHeight(row, 16777215)
+        if not self.pane_heights:
+            lay.setRowStretchFactor(0, max(3, len(self.plots)))
+            for row in range(1, len(self.plots)):
+                lay.setRowStretchFactor(row, 1)
+        else:
+            fractions = [self.pane_heights.get(k, DEFAULT_PANE_FRACTION) for k in self._row_keys()]
+            margins = lay.getContentsMargins()
+            free = self.viewport().height() - margins[1] - margins[3] - lay.verticalSpacing() * (len(fractions) - 1)
+            for row, f in enumerate(fractions):
+                lay.setRowFixedHeight(row, max(MIN_PANE_HEIGHT, free * f / sum(fractions)))
+        lay.invalidate()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self.pane_heights and self.plots:
+            self._apply_heights()
+
+    def reset_panes(self):
+        """Altura y escala originales en todos los paneles inferiores."""
+        self.pane_heights = {}
+        for p in list(self.plots[1:]):
+            self._reset_pane(p)
+        self._pane_y.clear()
+        self._apply_heights()
+        self.panesResized.emit()
+
+    def _drag_divider(self, drag, dy: float):
+        row = drag["row"]
+        if len(drag["heights"]) != len(self.plots):
+            return  # cambiaron los indicadores durante el arrastre
+        heights = list(drag["heights"])
+        pair = heights[row] + heights[row + 1]
+        heights[row] = min(max(heights[row] + dy, MIN_PANE_HEIGHT), pair - MIN_PANE_HEIGHT)
+        heights[row + 1] = pair - heights[row]
+        self.pane_heights = {k: h / sum(heights) for k, h in zip(self._row_keys(), heights)}
+        self._apply_heights()
+
+    def _drag_axis(self, drag, dy: float):
+        plot = next((p for p, k in self._pane_key.items() if k == drag["key"]), None)
+        if plot is None:
+            return
+        lo, hi = drag["range"]
+        half = (hi - lo) / 2 * 1.006 ** dy  # hacia abajo se comprime, hacia arriba se estira
+        self._set_pane_range(plot, (lo + hi) / 2 - half, (lo + hi) / 2 + half)
+
+    def mousePressEvent(self, ev):
+        zone = self._zone_at(ev.position()) if ev.button() == QtCore.Qt.LeftButton else None
+        if zone and zone[0] == "divider":
+            self._drag = {"kind": "divider", "row": zone[1], "y": ev.position().y(),
+                          "heights": [p.geometry().height() for p in self.plots]}
+        elif zone:
+            self._drag = {"kind": "axis", "key": self._pane_key[zone[1]], "y": ev.position().y(),
+                          "range": tuple(zone[1].getViewBox().viewRange()[1])}
+        else:
+            super().mousePressEvent(ev)
+            return
+        ev.accept()
+
+    def mouseMoveEvent(self, ev):
+        if self._drag:
+            dy = ev.position().y() - self._drag["y"]
+            if dy:
+                (self._drag_divider if self._drag["kind"] == "divider" else self._drag_axis)(self._drag, dy)
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+        zone = self._zone_at(ev.position())
+        if zone:
+            self.viewport().setCursor(QtCore.Qt.SplitVCursor if zone[0] == "divider" else QtCore.Qt.SizeVerCursor)
+        else:
+            self.viewport().unsetCursor()
+
+    def mouseReleaseEvent(self, ev):
+        if self._drag:
+            if self._drag["kind"] == "divider":
+                self.panesResized.emit()
+            self._drag = None
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev):
+        zone = self._zone_at(ev.position())
+        if zone and zone[0] == "axis":
+            self._reset_pane(zone[1])
+        elif zone:
+            self.pane_heights = {}
+            self._apply_heights()
+            self.panesResized.emit()
+        else:
+            super().mouseDoubleClickEvent(ev)
+            return
+        ev.accept()
+
+    def wheelEvent(self, ev):
+        zone = self._zone_at(ev.position())
+        if zone and zone[0] == "axis":
+            lo, hi = zone[1].getViewBox().viewRange()[1]
+            half = (hi - lo) / 2 * 0.999 ** ev.angleDelta().y()
+            self._set_pane_range(zone[1], (lo + hi) / 2 - half, (lo + hi) / 2 + half)
+            ev.accept()
+            return
+        super().wheelEvent(ev)
 
     def _make_tag(self) -> QtWidgets.QLabel:
         tag = QtWidgets.QLabel(self)
@@ -550,6 +715,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._last_line = None
         self.plots, self._series, self._entries, self._labels, self._cross = [], {}, {}, {}, {}
         self._fixed = set()
+        self._pane_key, self._pane_default, self._manual = {}, {}, set()
+        if not keep_view:
+            self._pane_y.clear()  # otro símbolo o intervalo: la escala elegida ya no aplica
         self._watermark = (None, None)
         self._alert_items = []
         self.df = df
@@ -643,9 +811,13 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 rows.append(_Entry(sym, [], compare=(pct, arr), color=color, removable=True))
             self._entries[main][:0] = rows  # las comparaciones van arriba de los indicadores
 
+        seen: dict = {}
         for k, cp in enumerate(panes, start=1):
             p = self._new_plot(k, idx)
             p.setXLink(main)
+            seen[cp.defn.key] = seen.get(cp.defn.key, 0) + 1
+            self._pane_key[p] = f"{cp.defn.key}#{seen[cp.defn.key]}"  # dos RSI son dos paneles distintos
+            p.getViewBox().sigYRangeChanged.connect(lambda *_a, plot=p: self._on_pane_yrange(plot))
             self._draw_computed(p, cp, x, iter(PALETTE * 10))
             for lv in cp.defn.levels:
                 p.addItem(pg.InfiniteLine(pos=lv, angle=0, movable=False,
@@ -655,13 +827,12 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 lo, hi = cp.defn.yrange
                 pad = (hi - lo) * 0.06
                 p.setYRange(lo - pad, hi + pad, padding=0)
+                self._pane_default[p] = (lo - pad, hi + pad)
                 self._fixed.add(p)
+            if self._pane_key[p] in self._pane_y:
+                self._set_pane_range(p, *self._pane_y[self._pane_key[p]])
 
-        # proporciones: el precio ocupa más espacio
-        lay = self.ci.layout
-        lay.setRowStretchFactor(0, max(3, len(panes) + 1))
-        for k in range(1, len(panes) + 1):
-            lay.setRowStretchFactor(k, 1)
+        self._apply_heights()  # el precio ocupa más espacio, salvo que se haya ajustado a mano
         for p in self.plots[:-1]:
             # solo el último panel muestra las fechas; en los demás el eje queda activo pero sin
             # texto ni altura, porque un eje oculto no dibuja las líneas verticales de la cuadrícula
@@ -733,7 +904,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             return
         x0, x1 = self.plots[0].getViewBox().viewRange()[0]
         for p in self.plots:
-            if p in self._fixed:
+            if p in self._fixed or p in self._manual:
                 continue
             lo, hi = np.inf, -np.inf
             for xs, ys in self._series.get(p, []):

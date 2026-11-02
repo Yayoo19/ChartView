@@ -310,6 +310,7 @@ class MainWindow(QtWidgets.QMainWindow):
         full = v.addAction("Pantalla completa", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen(),
                            QtGui.QKeySequence("F11"))
         full.setToolTip("Pantalla completa (F11)")
+        v.addAction("Restablecer paneles inferiores", lambda: self.chart.reset_panes())
         grid_menu = v.addMenu("Cuadrícula")
         grid_group = QtGui.QActionGroup(grid_menu)
         self._grid_actions = {}
@@ -369,6 +370,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.info.setStyleSheet("font-size:12px; padding:0 2px 4px 2px;")
         self.chart = ChartWidget()
         self.chart.grid_alpha = dict(GRID_LEVELS).get(self.cfg.get("grid", "Media"), 0.22)
+        self.chart.pane_heights = dict(self.cfg.get("pane_heights") or {})
+        self.chart.panesResized.connect(self._save_pane_heights)
         self.chart.hovered.connect(self.info.setText)
         self.chart.legendAction.connect(self._legend_action)
         self.chart.compareRemoved.connect(self.remove_comparison)
@@ -1197,6 +1200,10 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.timer.stop()
             self.quote_timer.start(5 * 60 * 1000)
+        self._save()
+
+    def _save_pane_heights(self):
+        self.cfg["pane_heights"] = dict(self.chart.pane_heights)
         self._save()
 
     def _save(self):
