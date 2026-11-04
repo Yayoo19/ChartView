@@ -499,6 +499,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._intraday = False
         self.default_bars = 150
         self.watermark_size = 44  # puntos del símbolo de fondo (menor con varias gráficas)
+        self.legend_top = 2  # la leyenda del precio empieza debajo del encabezado, que va sobre la gráfica
         self._synced_range = None  # último rango puesto por sincronización (no se reenvía)
         self.grid_alpha = 0.22  # opacidad de la cuadrícula del fondo (0 = sin cuadrícula)
         # ajuste manual de los paneles inferiores; se guarda por indicador porque la gráfica
@@ -788,7 +789,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._cross[p] = (v, h)
         lbl = LegendItem(self)
         lbl.setParentItem(vb)
-        lbl.setPos(6, 2)
+        lbl.setPos(6, self.legend_top if not self.plots else 2)  # aquí self.plots aún no incluye este panel
         lbl.setZValue(200)
         self._labels[p] = lbl
         self._series[p] = []
@@ -1115,6 +1116,11 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     def fit_all(self):
         if self.plots and self.df is not None:
             self.plots[0].setXRange(-2, len(self.df) + 2, padding=0)
+
+    def set_legend_top(self, y: int):
+        self.legend_top = y
+        if self.plots:
+            self._labels[self.plots[0]].setPos(6, y)
 
     def set_compact(self, compact: bool):
         """Símbolo de fondo más chico cuando hay varias gráficas en la ventana."""

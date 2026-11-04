@@ -49,9 +49,15 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 ## Interfaz
 
-- **Barra superior:** buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Alertas y ⟳ (actualizar).
+- **Barra superior:** menú ☰, ✎ (herramientas de dibujo), buscador, intervalos rápidos (5m, 15m, 1h, 4h, D, S, M) y la lista con todos los intervalos; luego el tipo de gráfica, Indicadores, Comparar, el diseño de gráficas y ⟳ (actualizar).
+- **Encabezado:** el símbolo, el precio y los datos de la vela van dentro de la gráfica, arriba a la izquierda, y dejan pasar el mouse.
+- **Columna de iconos a la derecha:** 📋 listas de seguimiento, 📊 análisis y 🔔 alertas, con el número de alertas activas. Las listas y el análisis abren un panel a la vez; otro clic lo cierra. La app recuerda cuál dejaste abierto.
+- **Panel inferior:** un clic en una pestaña lo abre, otro clic en la misma lo pliega (también Ctrl+J), y su borde superior cambia la altura.
+  - **Movimientos:** los símbolos de la lista activa, de mayor a menor cambio. Un clic abre el símbolo.
+  - **Alertas:** las últimas alertas disparadas. Un clic abre el símbolo.
+  - **Notas:** texto libre por símbolo, que se guarda solo.
 - **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
-- **Panel de análisis** (📊 Análisis en la barra, Ver → Panel de análisis o Ctrl+E), para acciones con cobertura de analistas:
+- **Panel de análisis** (📊 a la derecha, Ver → Panel de análisis o Ctrl+E), para acciones con cobertura de analistas:
   - Próximo reporte trimestral con su fecha, la utilidad por acción y los ingresos estimados.
   - Historial de reportes: estimado contra real y sorpresa en %.
   - Estimaciones del trimestre y año actual y siguiente.
@@ -61,7 +67,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - **Paneles inferiores (RSI, MACD, volumen…):** arrastra el borde entre dos paneles para cambiar su altura; la app la recuerda. Arrastra el eje de valores de un panel o usa la rueda sobre él para estirar la escala, y después arrastra dentro del panel para moverla en vertical. Doble clic en el eje vuelve a la escala automática, doble clic en un borde a las alturas originales, y Ver → Restablecer paneles inferiores deshace todo. La escala a mano se mantiene al actualizar y se reinicia al cambiar de símbolo o intervalo.
 - **Cuenta regresiva:** en todos los intervalos, la etiqueta del último precio muestra cuánto falta para que cierre la vela actual, según el horario de cada mercado (cripto opera todo el día y cierra a la medianoche UTC). Las velas de semana, mes o más cierran con la última sesión hábil de su periodo. Si la vela ya cerró (mercado cerrado) no se muestra.
 - **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
-- **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
+- **Menú ☰:** Archivo (buscar, importar CSV, guardar imagen), Ver (paneles, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
 ### Varias gráficas
 
@@ -92,9 +98,9 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - **%** (abajo de la gráfica o Alt+P): etiqueta el eje en % desde la primera vela visible. Se excluye con Log.
 - **Log** (abajo de la gráfica o Alt+L): escala logarítmica en la gráfica de precio, incluidos los indicadores dibujados sobre ella.
 - Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora, y las de 2 semanas con velas semanales (siempre empiezan en lunes). Las de 2, 3, 6 y 12 meses se arman con velas mensuales, alineadas a bimestres, trimestres, semestres y años del calendario.
-- El panel de listas se puede cerrar con la ✕ o arrastrar a otro lado. Se vuelve a abrir con **☰ Listas** (primer botón de la barra) o Ctrl+B. La app recuerda dónde lo dejaste.
+- El panel de listas se abre y se cierra con 📋 a la derecha, con la ✕ o con Ctrl+B.
 - Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas. Cada símbolo muestra debajo el nombre de la empresa o serie. Con clic derecho copias un símbolo a otra lista o creas una alerta.
-- **Dibujo** (barra vertical a la izquierda de la gráfica; se oculta y se muestra con **✎ Dibujo** en la barra superior, Ver → Herramientas de dibujo o Ctrl+D):
+- **Dibujo** (barra vertical a la izquierda de la gráfica; se oculta y se muestra con **✎** en la barra superior, Ver → Herramientas de dibujo o Ctrl+D):
   - Herramientas agrupadas: cursor; líneas (horizontal, rayo horizontal, vertical, tendencia, rayo, flecha); canales (canal paralelo, tridente de Andrews); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci (retroceso y extensión por tendencia); trading (medir, posición larga, posición corta, VWAP anclado); borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
   - **Medir:** Shift+clic (o Shift+arrastrar) en cualquier momento, o la herramienta 📏. Muestra el cambio de precio, el %, las velas y el tiempo. Otro clic o Esc la quita; no se guarda.
   - **Posición larga o corta:** clic o arrastra hasta el objetivo. Las asas ajustan objetivo, stop y ancho, y la caja muestra el riesgo/beneficio.
@@ -106,7 +112,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
   - Esc cancela la herramienta, Ctrl+Z deshace y Ctrl+Y rehace (crear, mover, cambiar de estilo y borrar, por símbolo y mientras la app siga abierta), 👁 oculta los dibujos y 🗑 los borra todos.
   - Se guardan por símbolo, anclados a fecha y precio, así que siguen en su lugar al cambiar el intervalo, el periodo o la escala log.
   - Las imágenes se copian a `%USERPROFILE%\.chartview\images`.
-- **Alertas** (🔔 en la barra o Ctrl+Alt+A):
+- **Alertas** (🔔 a la derecha o Ctrl+Alt+A):
   - Condiciones: el precio cruza un nivel o queda por encima/debajo de él; el cambio del día sube o cae más de X %; el RSI cruza un umbral; el precio cruza una SMA/EMA en el intervalo que elijas.
   - Funcionan con acciones, índices, cripto y series macro.
   - Avisan con una notificación de escritorio, un sonido y parpadeo en la barra de tareas. Al hacer clic en la notificación se abre la gráfica.

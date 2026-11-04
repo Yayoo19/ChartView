@@ -11,6 +11,7 @@ from pyqtgraph.util.garbage_collector import GarbageCollector
 from . import alerts, config, data, macro
 from .alerts_ui import AlertsWindow
 from .analysis import AnalysisPanel
+from .bottom_panel import BottomPanel
 from .chart import CANDLE_TYPES, CHART_TYPES, DOWN, UP, fmt_change, fmt_price
 from .chart_types import PARAM_SPECS, TRANSFORMED, transform
 from .dialogs import ChartTypeDialog, CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
@@ -36,10 +37,11 @@ MAGNET_MODES = {"off": "Desactivado", "weak": "Débil (se pega si estás cerca d
                 "strong": "Fuerte (siempre se pega a apertura, máximo, mínimo o cierre)"}
 # cuadrícula del fondo: (nombre, opacidad de las líneas)
 GRID_LEVELS = [("Sin cuadrícula", 0.0), ("Suave", 0.12), ("Media", 0.22), ("Fuerte", 0.4)]
+WINDOW_STATE_VERSION = 2  # el acomodo guardado antes de la columna de la derecha ya no aplica
 SHORTCUTS = [
     ("Ctrl+L", "Ir al buscador de símbolos"), ("Ctrl+F", "Búsqueda avanzada"), ("F5", "Actualizar datos"),
     ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"), ("Ctrl+D", "Mostrar u ocultar herramientas de dibujo"),
-    ("Ctrl+E", "Mostrar u ocultar el panel de análisis"),
+    ("Ctrl+E", "Mostrar u ocultar el panel de análisis"), ("Ctrl+J", "Abrir o plegar el panel inferior"),
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
     ("Alt+P", "Escala porcentual"), ("Ctrl+Z", "Deshacer en los dibujos"), ("Ctrl+Y", "Rehacer en los dibujos"),
     ("Shift+clic", "Medir precio, % y velas"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
@@ -102,8 +104,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_actions()
         self._build_toolbar()
         self._build_center()
+        self._build_bottom()  # antes de las listas: se llena con sus precios
         self._build_watchlist()
         self._build_analysis_dock()
+        self._build_rail()
         self._build_menu()
         self._build_shortcuts()
         self.statusBar().showMessage("Listo")
@@ -119,7 +123,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.cfg.get("window_geometry"):
             self.restoreGeometry(QtCore.QByteArray.fromBase64(self.cfg["window_geometry"].encode()))
         if self.cfg.get("window_state"):
-            self.restoreState(QtCore.QByteArray.fromBase64(self.cfg["window_state"].encode()))
+            self.restoreState(QtCore.QByteArray.fromBase64(self.cfg["window_state"].encode()), WINDOW_STATE_VERSION)
+        if self.watch_dock.isVisible() and self.analysis_dock.isVisible():
+            self.analysis_dock.hide()  # un panel a la vez
+        self.bottom.set_state(int(self._bottom_start.get("tab", 0)), bool(self._bottom_start.get("open")))
         QtCore.QTimer.singleShot(0, self._load_all)
         QtCore.QTimer.singleShot(500, self.refresh_quotes)
 
@@ -385,7 +392,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recent_act = action("Ver últimas velas", "Ver las últimas velas (Inicio)", "Home", short="Recientes",
                                  slot=lambda: self.chart.show_last(self.chart.default_bars))
         self.drawbar_act = action("Herramientas de dibujo", "Mostrar u ocultar las herramientas de dibujo (Ctrl+D)",
-                                  "Ctrl+D", True, short="✎ Dibujo")
+                                  "Ctrl+D", True, short="✎")
         self.drawbar_act.setChecked(bool(self.cfg.get("drawbar_visible", True)))
         self.drawbar_act.toggled.connect(self._set_drawbar_visible)
 
@@ -396,6 +403,14 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.setIconSize(QtCore.QSize(16, 16))
         self.addToolBar(tb)
         self.main_tb = tb
+        self.menu_btn = QtWidgets.QToolButton()
+        self.menu_btn.setText("☰")
+        self.menu_btn.setToolTip("Menú")
+        self.menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.menu_btn.setStyleSheet("QToolButton::menu-indicator{image:none;}")
+        tb.addWidget(self.menu_btn)
+        tb.addAction(self.drawbar_act)
+        tb.addSeparator()
 
         # un solo buscador para todos los mercados (sustituye al selector «Mercado»)
         self.sym_edit = SymbolSearch(self._known_symbols)
@@ -461,10 +476,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._compare_menu.aboutToShow.connect(self._fill_compare_menu)
         self.compare_btn.setMenu(self._compare_menu)
         tb.addWidget(self.compare_btn)
-        self.alert_btn = QtWidgets.QPushButton("🔔 Alertas")
-        self.alert_btn.setToolTip("Alertas de precio e indicadores (Ctrl+Alt+A)")
-        self.alert_btn.clicked.connect(lambda: self.open_alerts())
-        tb.addWidget(self.alert_btn)
 
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
@@ -516,7 +527,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return w
 
     def _build_menu(self):
-        mb = self.menuBar()
+        mb = QtWidgets.QMenu(self)  # sin barra de menú: esa altura es para la gráfica
+        self.menu_btn.setMenu(mb)
         f = mb.addMenu("&Archivo")
         f.addAction("Buscar símbolo", lambda: (self.sym_edit.setFocus(), self.sym_edit.selectAll()),
                     QtGui.QKeySequence("Ctrl+L"))
@@ -532,6 +544,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addAction(self.analysis_dock.toggleViewAction())
         v.addAction(self.drawbar_act)
         v.addMenu(self._layout_menu)
+        v.addAction("Panel inferior", self.bottom.toggle, QtGui.QKeySequence("Ctrl+J"))
         v.addSeparator()
         v.addAction(self.log_scale)
         v.addAction(self.pct_scale)
@@ -567,6 +580,11 @@ class MainWindow(QtWidgets.QMainWindow):
         a = mb.addMenu("A&yuda")
         a.addAction("Atajos de teclado", self.show_shortcuts, QtGui.QKeySequence("F1"))
         a.addAction("Acerca de ChartView", self.show_about)
+        # un menú oculto no atiende atajos por sí solo: la ventana los toma
+        for menu in mb.findChildren(QtWidgets.QMenu):
+            for act in menu.actions():
+                if not act.shortcut().isEmpty():
+                    self.addAction(act)
 
     def _set_grid_level(self, name: str):
         for p in self.panes:
@@ -784,7 +802,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_watchlist(self):
         dock = QtWidgets.QDockWidget("Listas de seguimiento", self)
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetClosable)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetClosable)
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -836,44 +854,99 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addLayout(row)
         dock.setWidget(w)
         dock.setMinimumWidth(300)
-        self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, dock)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+        dock.hide()  # la gráfica primero; si lo dejaste abierto, se restaura con la ventana
         self.watch_dock = dock
         dock.setObjectName("watchlist_dock")  # necesario para guardar/restaurar su estado
         # botón (y Ctrl+B) para volver a abrir el panel después de cerrarlo con la ✕
         toggle = dock.toggleViewAction()
         toggle.setText("Listas de seguimiento")
-        toggle.setIconText("☰ Listas")
+        toggle.setIconText("📋")
         toggle.setToolTip("Mostrar u ocultar las listas de seguimiento (Ctrl+B)")
         toggle.setShortcut(QtGui.QKeySequence("Ctrl+B"))
         self.addAction(toggle)  # el atajo funciona aunque el panel esté oculto
-        first = self.main_tb.actions()[0]
-        self.main_tb.insertAction(first, toggle)
-        self.main_tb.insertAction(first, self.drawbar_act)
-        self._tb_sep = self.main_tb.insertSeparator(first)
         self._fill_watchlist_combo(self.cfg.get("active_watchlist"))
 
     def _build_analysis_dock(self):
         """Panel derecho con reportes trimestrales, estimaciones y opinión de analistas."""
         dock = QtWidgets.QDockWidget("Análisis", self)
         dock.setObjectName("analysis_dock")  # para guardar/restaurar si quedó abierto
-        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetClosable)
+        dock.setFeatures(QtWidgets.QDockWidget.DockWidgetClosable)
         self.analysis = AnalysisPanel()
         dock.setWidget(self.analysis)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+        dock.hide()
         self.analysis_dock = dock
         self._fund_cache: dict = {}  # símbolo -> (hora, datos)
         toggle = dock.toggleViewAction()
         toggle.setText("Panel de análisis")
-        toggle.setIconText("📊 Análisis")
+        toggle.setIconText("📊")
         toggle.setToolTip("Reportes trimestrales y opinión de analistas (Ctrl+E)")
         toggle.setShortcut(QtGui.QKeySequence("Ctrl+E"))
         self.addAction(toggle)
-        self.main_tb.insertAction(self._tb_sep, toggle)
         dock.visibilityChanged.connect(lambda on: self._refresh_analysis() if on else None)
+
+    def _build_rail(self):
+        """Columna de iconos a la derecha: abre un panel a la vez, o ninguno."""
+        rail = QtWidgets.QToolBar("Paneles")
+        rail.setObjectName("right_rail")
+        rail.setMovable(False)
+        rail.setFloatable(False)
+        rail.setContextMenuPolicy(QtCore.Qt.PreventContextMenu)
+        rail.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
+        rail.setStyleSheet("QToolBar{background:#131722;border:none;border-left:1px solid #2a2e39;padding:4px 2px;}"
+                           "QToolButton{min-width:26px;min-height:26px;font-size:15px;background:transparent;"
+                           "border:none;border-radius:4px;padding:2px;}"
+                           "QToolButton:hover{background:#2a2e39;}"
+                           "QToolButton:checked{background:#2a2e39;border-left:2px solid #2962ff;}")
+        self.addToolBar(QtCore.Qt.RightToolBarArea, rail)
+        for dock in (self.watch_dock, self.analysis_dock):
+            act = dock.toggleViewAction()
+            rail.addAction(act)
+            act.toggled.connect(lambda on, d=dock: self._on_panel(d, on))
+        self.alert_act = rail.addAction("🔔")
+        self.alert_act.triggered.connect(lambda: self.open_alerts())
+
+    def _on_panel(self, dock, on: bool):
+        if on:
+            for other in (self.watch_dock, self.analysis_dock):
+                if other is not dock:
+                    other.hide()
+
+    def _build_bottom(self):
+        self._bottom_start = dict(self.cfg.get("bottom_panel") or {})  # guardar durante el arranque lo pisaría
+        self.bottom = BottomPanel(self.cfg)
+        self.bottom.set_alerts(self.cfg.get("alert_history", []))
+        self.bottom.openSymbol.connect(lambda s: self.load(s, raw=True))
+        self.bottom.notesChanged.connect(self._save)
+        dock = QtWidgets.QDockWidget("Panel inferior", self)
+        dock.setObjectName("bottom_dock")
+        dock.setFeatures(QtWidgets.QDockWidget.NoDockWidgetFeatures)
+        dock.setTitleBarWidget(QtWidgets.QWidget())  # sin barra de título: solo las pestañas
+        dock.setWidget(self.bottom)
+        self.addDockWidget(QtCore.Qt.BottomDockWidgetArea, dock)
+        self.bottom_dock = dock
+        self.bottom.toggled.connect(self._on_bottom_toggled)
+        self._on_bottom_toggled(False)
+
+    def _on_bottom_toggled(self, on: bool):
+        dock = self.bottom_dock
+        bar = self.bottom.bar.sizeHint().height()
+        if on:
+            dock.setMinimumHeight(bar + 90)
+            dock.setMaximumHeight(16777215)
+            height = int((self.cfg.get("bottom_panel") or {}).get("height", 220))
+            # después de repartir el espacio: si no, Qt ignora la altura pedida
+            QtCore.QTimer.singleShot(0, lambda: self.resizeDocks([dock], [height], QtCore.Qt.Vertical))
+        else:
+            dock.setFixedHeight(bar)
+        if hasattr(self, "timer"):  # durante el arranque todavía no hay nada que guardar
+            self._save()
 
     def _refresh_analysis(self):
         """Carga los datos del símbolo abierto (solo si el panel está visible; caché de 1 hora)."""
         sym = self.symbol
+        self.bottom.set_symbol(sym)  # pasa cada vez que cambia el símbolo o la gráfica activa
         if not sym or not self.analysis_dock.isVisible():
             return
         name = data.short_name(self.meta.get("longName") or self.meta.get("shortName") or "")
@@ -1013,6 +1086,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for s in missing:
                 names[s] = found.get(s, "")  # vacío = no se encontró; no se vuelve a buscar
             self._apply_names()
+            self._show_quotes({})  # la tabla de movimientos también muestra los nombres
             self._save()
             self._fetch_names()  # por si mientras tanto se agregaron símbolos
 
@@ -1107,6 +1181,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 if np.isfinite(chg):
                     it.setText(2, f"{chg:+.2f}%")
                     it.setForeground(2, QtGui.QColor(UP if chg >= 0 else DOWN))
+        names = self.cfg.get("names", {})
+        self.bottom.set_movers([(s, names.get(s, ""), q[s][0], q[s][1]) for s in getattr(self, "_watch_items", {})
+                                if s in q and np.isfinite(q[s][0]) and np.isfinite(q[s][1])])
 
     def _known_symbols(self) -> dict[str, str]:
         """Sugerencias locales del buscador: {símbolo: descripción}."""
@@ -1573,6 +1650,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "active_chart": self.panes.index(a),
             "sync": self.sync,
         })
+        panel = self.cfg.setdefault("bottom_panel", {})
+        panel.update(open=self.bottom.expanded, tab=self.bottom.stack.currentIndex())
+        if self.bottom.expanded and self.isVisible():
+            panel["height"] = self.bottom_dock.height()
         config.save(self.cfg)
 
     # ======================================================== alertas
@@ -1611,7 +1692,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_alert_button(self):
         n = sum(1 for a in self.cfg.get("alerts", []) if a.get("enabled"))
-        self.alert_btn.setText(f"🔔 Alertas ({n})" if n else "🔔 Alertas")
+        self.alert_act.setText(f"🔔{n}" if n else "🔔")
+        self.alert_act.setToolTip(f"Alertas: {n} activas (Ctrl+Alt+A)" if n else "Alertas (Ctrl+Alt+A)")
 
     def last_price(self):
         if self.df is None or not len(self.df):
@@ -1642,6 +1724,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.open_alerts(alerts.new_alert(self.symbol, kind, price))
 
     def _on_alerts_changed(self):
+        self.bottom.set_alerts(self.cfg.get("alert_history", []))
         self._restart_alert_timer()
         self._update_alert_button()
         for p in self.panes:
@@ -1679,6 +1762,7 @@ class MainWindow(QtWidgets.QMainWindow):
         hist.append({"time": dt.datetime.now().isoformat(timespec="seconds"), "symbol": a["symbol"],
                      "text": text.replace("\n", " · ")})
         del hist[:-200]
+        self.bottom.set_alerts(hist)
         self._last_fired_symbol = a["symbol"]
         if self.tray is not None:
             self.tray.showMessage(title, text, QtWidgets.QSystemTrayIcon.Information, 15000)
@@ -1714,7 +1798,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, ev):
         # posición, tamaño y si el panel de listas quedó abierto, cerrado o flotando
         self.cfg["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode()
-        self.cfg["window_state"] = bytes(self.saveState().toBase64()).decode()
+        self.cfg["window_state"] = bytes(self.saveState(WINDOW_STATE_VERSION).toBase64()).decode()
         self._save()
         has_alerts = any(a.get("enabled") for a in self.cfg.get("alerts", []))
         if (not self._quitting and self.tray is not None and has_alerts

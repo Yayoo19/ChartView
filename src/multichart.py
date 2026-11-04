@@ -113,18 +113,17 @@ class ChartPane(QtWidgets.QFrame):
         self._comp_closes: dict = {}  # símbolo -> cierres alineados a self.df
         self._req = 0
 
-        self.header = self._label()
-        self.info = self._label()
         self.chart = ChartWidget()
+        self.header = self._label()  # van encima de la gráfica, para que ella tenga toda la altura
+        self.info = self._label()
         self.chart.grid_alpha = grid_alpha
         self.chart.pane_heights = dict(state.get("pane_heights") or {})
         self.chart.hovered.connect(self.info.setText)
         self.chart.viewport().installEventFilter(self)
+        self.chart.installEventFilter(self)  # para reacomodar el encabezado al cambiar de tamaño
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(1, 1, 1, 1)
         lay.setSpacing(0)
-        lay.addWidget(self.header)
-        lay.addWidget(self.info)
         lay.addWidget(self.chart, 1)
         self.compact = False
         self.set_appearance(False, True)
@@ -137,22 +136,32 @@ class ChartPane(QtWidgets.QFrame):
     def tz(self) -> str | None:
         return self.meta.get("exchangeTimezoneName") or self.meta.get("indexTimezone")
 
-    @staticmethod
-    def _label() -> QtWidgets.QLabel:
-        lab = QtWidgets.QLabel("")
+    def _label(self) -> QtWidgets.QLabel:
+        lab = QtWidgets.QLabel("", self.chart)
         lab.setTextFormat(QtCore.Qt.RichText)
-        # sin esto, un texto largo obligaría a ensanchar toda la gráfica
-        lab.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
+        lab.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)  # el mouse sigue llegando a la gráfica
         return lab
+
+    def _place_labels(self):
+        """Encabezado y datos de la vela arriba a la izquierda; la leyenda de indicadores, debajo."""
+        width = max(self.chart.width() - 88, 40)  # sin tapar el eje de precios
+        y = 2
+        for lab in (self.header, self.info):
+            height = lab.sizeHint().height()
+            lab.setGeometry(6, y, width, height)
+            lab.raise_()
+            y += height
+        self.chart.set_legend_top(y)
 
     def set_appearance(self, compact: bool, active: bool):
         """``compact``: hay varias gráficas en la ventana. ``active``: es la que recibe las órdenes."""
         self.compact = compact
-        self.header.setStyleSheet(f"font-size:{13 if compact else 15}px; padding:{'2px' if compact else '4px 2px'};")
-        self.info.setStyleSheet(f"font-size:{11 if compact else 12}px; padding:0 2px {'2px' if compact else '4px'} 2px;")
+        self.header.setStyleSheet(f"background:transparent; font-size:{13 if compact else 15}px; padding:1px 2px;")
+        self.info.setStyleSheet(f"background:transparent; font-size:{11 if compact else 12}px; padding:0 2px;")
         self.chart.set_compact(compact)
         color = "transparent" if not compact else "#2962ff" if active else "#2a2e39"
         self.setStyleSheet(f"#chartpane{{border:1px solid {color};}}")
+        self._place_labels()
 
     def state(self) -> dict:
         return {"symbol": self.symbol or self.want, "interval": self.interval, "period": self.period_key,
@@ -168,10 +177,14 @@ class ChartPane(QtWidgets.QFrame):
         self.deleteLater()
 
     def eventFilter(self, obj, ev):
+        if obj is self.chart:
+            if ev.type() == QtCore.QEvent.Resize:
+                self._place_labels()
+            return False
         if ev.type() == QtCore.QEvent.MouseButtonPress:
             self.activated.emit(self)  # no se consume: el clic sigue hacia la gráfica
         return False
 
-    def mousePressEvent(self, ev):  # clic en el encabezado
+    def mousePressEvent(self, ev):  # clic en el borde
         self.activated.emit(self)
         super().mousePressEvent(ev)
