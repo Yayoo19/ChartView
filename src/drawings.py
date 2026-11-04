@@ -193,6 +193,10 @@ class DrawingLayer(QtCore.QObject):
                 h["item"].setVisible(ed)
 
     def set_drawings(self, drawings: list[dict]):
+        """Sustituye los dibujos (otra gráfica abierta en el mismo símbolo los cambió)."""
+        self._cancel_preview()
+        for did in list(self._items):
+            self._unrender(did)
         self.drawings = drawings
         self.render_all()
 

@@ -10,10 +10,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import alerts, config, data, macro
 from .alerts_ui import AlertsWindow
 from .analysis import AnalysisPanel
-from .chart import CHART_TYPES, DOWN, UP, ChartWidget, fmt_change, fmt_price
+from .chart import CHART_TYPES, DOWN, UP, fmt_change, fmt_price
 from .dialogs import CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
 from .drawings import TOOL_GROUPS, TOOLS
 from .indicators import REGISTRY, by_category, compute
+from .multichart import LAYOUTS, SYNC_OPTIONS, ChartPane, build_grid, chart_count, layout_icon
 from .searchbox import SymbolSearch
 from .workers import run_task
 
@@ -89,14 +90,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1500, 920)
         self.cfg = config.load()
         macro.FRED_API_KEY = self.cfg.get("fred_api_key", "")
-        self.indicators: list[dict] = [a for a in self.cfg["indicators"] if a.get("key") in REGISTRY]
-        self.df = None
-        self.meta: dict = {}
-        self.symbol: str = ""
-        self._req = 0
-        self.period_key: str = self.cfg.get("period", "2y")
-        self.comparisons: list[str] = list(self.cfg.get("comparisons", []))
-        self._comp_closes: dict = {}  # símbolo -> cierres alineados a self.df
+        self._syncing_ui = False  # la barra se está poniendo al día con la gráfica activa: no es una orden
+        self._inflight: dict = {}  # descargas en curso: (símbolo, intervalo, periodo) -> quienes la esperan
+        self.sync = {k: bool(self.cfg.get("sync", {}).get(k, k == "cursor")) for k, _ in SYNC_OPTIONS}
+        self._create_panes()
 
         self._build_actions()
         self._build_toolbar()
@@ -108,7 +105,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Listo")
 
         self.timer = QtCore.QTimer(self)
-        self.timer.timeout.connect(lambda: self.load(self.symbol, raw=True, keep_view=True, silent=True))
+        self.timer.timeout.connect(lambda: self._refresh_all(silent=True))
         self.quote_timer = QtCore.QTimer(self)
         self.quote_timer.timeout.connect(self.refresh_quotes)
         self.quote_timer.start(5 * 60 * 1000)
@@ -119,8 +116,226 @@ class MainWindow(QtWidgets.QMainWindow):
             self.restoreGeometry(QtCore.QByteArray.fromBase64(self.cfg["window_geometry"].encode()))
         if self.cfg.get("window_state"):
             self.restoreState(QtCore.QByteArray.fromBase64(self.cfg["window_state"].encode()))
-        QtCore.QTimer.singleShot(0, lambda: self.load(self.cfg["symbol"], raw=True))
+        QtCore.QTimer.singleShot(0, self._load_all)
         QtCore.QTimer.singleShot(500, self.refresh_quotes)
+
+    # ================================================================ varias gráficas
+    # El resto de la ventana (indicadores, comparar, alertas, análisis…) trabaja sobre la gráfica activa.
+    chart = property(lambda self: self.active.chart)
+    df = property(lambda self: self.active.df)
+    meta = property(lambda self: self.active.meta)
+    symbol = property(lambda self: self.active.symbol)
+    period_key = property(lambda self: self.active.period_key)
+    comparisons = property(lambda self: self.active.comparisons)
+    indicators = property(lambda self: self.active.indicators,
+                          lambda self, value: setattr(self.active, "indicators", value))
+
+    def _create_panes(self):
+        cfg = self.cfg
+        self.layout_kind = cfg.get("layout") if cfg.get("layout") in LAYOUTS else "1"
+        states = list(cfg.get("charts") or [])
+        if not states:  # configuración anterior a las varias gráficas
+            states = [{"symbol": cfg.get("symbol"), "interval": cfg.get("interval"), "period": cfg.get("period"),
+                       "chart_type": cfg.get("chart_type"), "log": cfg.get("log_scale"),
+                       "indicators": cfg.get("indicators"), "comparisons": cfg.get("comparisons"),
+                       "pane_heights": cfg.get("pane_heights")}]
+        n = chart_count(self.layout_kind)
+        states += [states[0]] * (n - len(states))
+        self.panes = []
+        self.active = None
+        for st in states[:n]:
+            self.panes.append(self._new_pane(st))
+        self.active = self.panes[min(int(cfg.get("active_chart", 0)), n - 1)]
+        self._parked = states[n:]  # gráficas que no caben en este diseño; regresan si vuelve a haber lugar
+
+    def _new_pane(self, state: dict) -> ChartPane:
+        pane = ChartPane(state, dict(GRID_LEVELS).get(self.cfg.get("grid", "Media"), 0.22))
+        pane.activated.connect(self._set_active)
+        chart, layer = pane.chart, pane.chart.layer
+        chart.panesResized.connect(self._save)
+        chart.legendAction.connect(lambda act, i, p=pane: (self._set_active(p), self._legend_action(act, i)))
+        chart.compareRemoved.connect(lambda sym, p=pane: (self._set_active(p), self.remove_comparison(sym)))
+        chart.cursorTime.connect(lambda t, p=pane: self._on_cursor(p, t))
+        chart.rangeChanged.connect(lambda p=pane: self._on_view_changed(p))
+        layer.changed.connect(lambda p=pane: self._save_drawings(p))
+        layer.toolReset.connect(lambda: self._tool_actions["cursor"].setChecked(True) or self._on_tool("cursor"))
+        layer.message.connect(lambda m: self.statusBar().showMessage(m, 5000))
+        layer.alertRequested.connect(self.alert_at_price)
+        if self.active is not None:  # la barra de dibujo es una sola: la gráfica nueva hereda lo elegido
+            src = self.active.chart.layer
+            layer.color, layer.width, layer.magnet, layer.visible = src.color, src.width, src.magnet, src.visible
+            layer.set_tool(src.tool)
+            if src.tool != "cursor":
+                chart.setCursor(QtCore.Qt.CrossCursor)
+        return pane
+
+    def _load_all(self):
+        # solo la activa avisa con ventana si falla, para no encimar un aviso por cada gráfica
+        for p in self.panes:
+            self.load(p.want, raw=True, silent=p is not self.active, pane=p)
+
+    def _refresh_all(self, silent=False):
+        for p in self.panes:
+            self.load(p.want, raw=True, keep_view=True, silent=silent or p is not self.active, pane=p)
+
+    def _set_active(self, pane: ChartPane):
+        if pane is self.active:
+            return
+        self.active = pane
+        self.statusBar().clearMessage()  # el mensaje era de la gráfica anterior
+        self._apply_appearance()
+        self._sync_ui()
+        self._refresh_analysis()
+        if pane.df is not None:
+            self._update_header(data.INTERVALS[pane.interval][2], pane)
+
+    def _apply_appearance(self):
+        for p in self.panes:
+            p.set_appearance(len(self.panes) > 1, p is self.active)
+            if p.df is not None:  # el encabezado cambia entre compacto y completo
+                self._update_header(data.INTERVALS[p.interval][2], p)
+
+    def _sync_ui(self):
+        """Pone la barra superior y la de rangos con los datos de la gráfica activa."""
+        a = self.active
+        self._syncing_ui = True
+        try:
+            self.sym_edit.setText(a.want)
+            self.interval.setCurrentText(a.interval)
+            self.ctype.setCurrentText(a.chart_type)
+            self.log_scale.setChecked(a.log)
+        finally:
+            self._syncing_ui = False
+        self._sync_interval_buttons(a.interval)
+        self._sync_range_enabled(a.interval)
+        self._set_period(a.period_key)
+        self._update_compare_button()
+
+    def _build_layout_menu(self):
+        menu = QtWidgets.QMenu("Diseño de gráficas", self)
+        group = QtGui.QActionGroup(menu)
+        self._layout_actions = {}
+        for kind, (name, _tree) in LAYOUTS.items():
+            act = menu.addAction(layout_icon(kind), name, lambda k=kind: self.set_layout(k))
+            act.setCheckable(True)
+            act.setChecked(kind == self.layout_kind)
+            group.addAction(act)
+            self._layout_actions[kind] = act
+        menu.addSeparator()
+        title = menu.addAction("Sincronizar en todas las gráficas:")
+        title.setEnabled(False)
+        for key, name in SYNC_OPTIONS:
+            act = menu.addAction(name)
+            act.setCheckable(True)
+            act.setChecked(self.sync[key])
+            act.toggled.connect(lambda on, k=key: self._set_sync(k, on))
+        self._layout_menu = menu
+        self.layout_btn = QtWidgets.QToolButton()
+        self.layout_btn.setToolTip("Varias gráficas: diseño y sincronización")
+        self.layout_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.layout_btn.setIcon(layout_icon(self.layout_kind))
+        self.layout_btn.setMenu(menu)
+        return self.layout_btn
+
+    def _place_panes(self):
+        """(Re)arma la cuadrícula con el diseño actual, sin tocar las gráficas."""
+        for p in self.panes:
+            p.setParent(None)
+        old = self._grid_lay.takeAt(0)
+        if old is not None and old.widget() is not None:
+            old.widget().deleteLater()
+        root, self._splitters = build_grid(self.layout_kind, self.panes)
+        saved = self.cfg.get("layout_sizes", {}).get(self.layout_kind) or []
+        if len(saved) == len(self._splitters):
+            for sp, sizes in zip(self._splitters, saved):
+                if len(sizes) == sp.count() and all(sizes):
+                    sp.setSizes(sizes)
+        self._grid_lay.addWidget(root)
+        for p in self.panes:
+            p.show()
+        self._apply_appearance()
+
+    def set_layout(self, kind: str):
+        if kind == self.layout_kind:
+            return
+        self._remember_sizes()
+        self.layout_kind = kind
+        n = chart_count(kind)
+        while len(self.panes) > n:
+            p = self.panes.pop()
+            self._parked.insert(0, deepcopy(p.state()))
+            p.retire()
+        if self.active not in self.panes:
+            self.active = self.panes[0]
+        added = []
+        while len(self.panes) < n:
+            # primero las que se habían guardado; si no hay, una copia de la activa
+            st = self._parked.pop(0) if self._parked else self.active.state()
+            st = {**st, "symbol": self.active.want} if self.sync["symbol"] else st
+            if self.sync["interval"]:
+                st = {**st, "interval": self.active.interval, "period": self.active.period_key}
+            pane = self._new_pane(st)
+            self.panes.append(pane)
+            added.append(pane)
+        self._place_panes()
+        self.layout_btn.setIcon(layout_icon(kind))
+        self._layout_actions[kind].setChecked(True)
+        self._sync_ui()
+        self._refresh_analysis()
+        for p in added:
+            self.load(p.want, raw=True, silent=True, pane=p)
+        self._save()
+
+    def _set_sync(self, key: str, on: bool):
+        self.sync[key] = on
+        a, others = self.active, [p for p in self.panes if p is not self.active]
+        if key == "symbol" and on and a.symbol:
+            for p in others:
+                if p.symbol != a.symbol:
+                    self.load(a.symbol, raw=True, silent=True, pane=p)
+        elif key == "interval" and on:
+            for p in others:
+                if p.interval != a.interval or p.period_key != a.period_key:
+                    p.interval, p.period_key = a.interval, a.period_key
+                    self.load(p.want, raw=True, silent=True, pane=p)
+        elif key == "cursor" and not on:
+            for p in others:
+                p.chart.show_cursor_at(float("nan"))
+        elif key == "time" and on:
+            self._align_view(a, others)
+        self._save()
+
+    def _on_cursor(self, source: ChartPane, t: float):
+        if self.sync["cursor"]:
+            for p in self.panes:
+                if p is not source:
+                    p.chart.show_cursor_at(t)
+
+    def _on_view_changed(self, source: ChartPane):
+        if self.sync["time"]:
+            self._align_view(source, [p for p in self.panes if p is not source])
+
+    @staticmethod
+    def _align_view(source: ChartPane, targets: list[ChartPane]):
+        times = source.chart.visible_times()
+        if times:
+            for p in targets:
+                p.chart.show_times(*times)
+
+    def _fetch(self, sym, interval, period, on_done, on_fail):
+        """Descarga velas. Las gráficas que piden lo mismo a la vez comparten una sola descarga."""
+        key = (sym, interval, period)
+        if key in self._inflight:
+            self._inflight[key].append((on_done, on_fail))
+            return
+        self._inflight[key] = [(on_done, on_fail)]
+
+        def finish(which, result, key=key):
+            for callbacks in self._inflight.pop(key):
+                callbacks[which](result)
+
+        run_task(data.load, sym, interval, period,
+                 on_done=lambda r: finish(0, r), on_fail=lambda e: finish(1, e))
 
     # ================================================================ UI
     def _build_actions(self):
@@ -140,8 +355,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.log_scale = action("Escala logarítmica", "Escala logarítmica en la gráfica de precio (Alt+L)",
                                 "Alt+L", True, short="Log")
-        self.log_scale.setChecked(bool(self.cfg.get("log_scale")))
-        self.log_scale.toggled.connect(lambda _c: (self.redraw(keep_view=True), self._save()))
+        self.log_scale.setChecked(self.active.log)
+        self.log_scale.toggled.connect(self._on_log)
         self.auto = action("Actualización automática", "Actualizar la gráfica automáticamente",
                            checkable=True, short="Auto")
         self.auto.setChecked(bool(self.cfg.get("auto_refresh")))
@@ -153,7 +368,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.auto_every.setCurrentIndex(max(0, self.auto_every.findData(self.cfg.get("refresh_secs", 60))))
         self.auto_every.currentIndexChanged.connect(self._apply_auto_refresh)
         self.refresh_act = action("Actualizar datos", "Actualizar datos (F5)", "F5", short="⟳",
-                                  slot=lambda: self.load(self.symbol, raw=True, keep_view=True))
+                                  slot=lambda: self._refresh_all())
         self.fit_act = action("Ver toda la historia", "Ver toda la historia cargada", short="Ver todo",
                               slot=lambda: self.chart.fit_all())
         self.recent_act = action("Ver últimas velas", "Ver las últimas velas (Inicio)", "Home", short="Recientes",
@@ -192,7 +407,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.interval = QtWidgets.QComboBox()
         self.interval.setToolTip("Todos los intervalos")
         self.interval.addItems(list(data.INTERVALS))
-        self.interval.setCurrentText(self.cfg.get("interval", "1 día"))
+        self.interval.setCurrentText(self.active.interval)
         self.interval.currentTextChanged.connect(self._on_interval)
         tb.addWidget(self.interval)
         tb.addSeparator()
@@ -200,8 +415,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctype = QtWidgets.QComboBox()
         self.ctype.setToolTip("Tipo de gráfica")
         self.ctype.addItems(CHART_TYPES)
-        self.ctype.setCurrentText(self.cfg.get("chart_type", "Velas"))
-        self.ctype.currentTextChanged.connect(lambda _t: self.redraw(keep_view=True))
+        self.ctype.setCurrentText(self.active.chart_type)
+        self.ctype.currentTextChanged.connect(self._on_chart_type)
         tb.addWidget(self.ctype)
 
         ind_btn = QtWidgets.QToolButton()
@@ -238,6 +453,7 @@ class MainWindow(QtWidgets.QMainWindow):
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         tb.addWidget(spacer)
+        tb.addWidget(self._build_layout_menu())
         tb.addAction(self.refresh_act)
         self._sync_interval_buttons(self.interval.currentText())
         self._update_compare_button()
@@ -299,6 +515,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addAction(self.watch_dock.toggleViewAction())
         v.addAction(self.analysis_dock.toggleViewAction())
         v.addAction(self.drawbar_act)
+        v.addMenu(self._layout_menu)
         v.addSeparator()
         v.addAction(self.log_scale)
         v.addAction(self.fit_act)
@@ -335,7 +552,8 @@ class MainWindow(QtWidgets.QMainWindow):
         a.addAction("Acerca de ChartView", self.show_about)
 
     def _set_grid_level(self, name: str):
-        self.chart.set_grid(dict(GRID_LEVELS)[name])
+        for p in self.panes:
+            p.chart.set_grid(dict(GRID_LEVELS)[name])
         self._grid_actions[name].setChecked(True)
         if name != "Sin cuadrícula":
             self.cfg["grid_last_on"] = name  # para que Ctrl+G vuelva al último nivel encendido
@@ -362,31 +580,15 @@ class MainWindow(QtWidgets.QMainWindow):
         lay = QtWidgets.QVBoxLayout(w)
         lay.setContentsMargins(6, 4, 6, 0)
         lay.setSpacing(2)
-        self.header = QtWidgets.QLabel("")
-        self.header.setTextFormat(QtCore.Qt.RichText)
-        self.header.setStyleSheet("font-size:15px; padding:4px 2px;")
-        self.info = QtWidgets.QLabel("")
-        self.info.setTextFormat(QtCore.Qt.RichText)
-        self.info.setStyleSheet("font-size:12px; padding:0 2px 4px 2px;")
-        self.chart = ChartWidget()
-        self.chart.grid_alpha = dict(GRID_LEVELS).get(self.cfg.get("grid", "Media"), 0.22)
-        self.chart.pane_heights = dict(self.cfg.get("pane_heights") or {})
-        self.chart.panesResized.connect(self._save_pane_heights)
-        self.chart.hovered.connect(self.info.setText)
-        self.chart.legendAction.connect(self._legend_action)
-        self.chart.compareRemoved.connect(self.remove_comparison)
-        layer = self.chart.layer
-        layer.changed.connect(self._save_drawings)
-        layer.toolReset.connect(lambda: self._tool_actions["cursor"].setChecked(True) or self._on_tool("cursor"))
-        layer.message.connect(lambda m: self.statusBar().showMessage(m, 5000))
-        layer.alertRequested.connect(self.alert_at_price)
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(4)
         self.drawbar = self._build_drawbar()
+        grid_host = QtWidgets.QWidget()
+        self._grid_lay = QtWidgets.QVBoxLayout(grid_host)
+        self._grid_lay.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.drawbar)
-        row.addWidget(self.chart, 1)
-        lay.addWidget(self.header)
-        lay.addWidget(self.info)
+        row.addWidget(grid_host, 1)
+        self._place_panes()
         lay.addLayout(row, 1)
         lay.addWidget(self._build_rangebar())
         self.setCentralWidget(w)
@@ -485,12 +687,12 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addSeparator()
         undo = bar.addAction("↶")
         undo.setToolTip("Deshacer último dibujo (Ctrl+Z)")
-        undo.triggered.connect(self.chart.layer.undo)
+        undo.triggered.connect(lambda: self.chart.layer.undo())
         self.eye_act = bar.addAction("👁")
         self.eye_act.setToolTip("Mostrar u ocultar dibujos")
         self.eye_act.setCheckable(True)
         self.eye_act.setChecked(True)
-        self.eye_act.toggled.connect(self.chart.layer.set_visible)
+        self.eye_act.toggled.connect(lambda on: [p.chart.layer.set_visible(on) for p in self.panes])
         trash = bar.addAction("🗑")
         trash.setToolTip("Borrar todos los dibujos de este símbolo")
         trash.triggered.connect(self._clear_drawings)
@@ -499,7 +701,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_magnet(self, mode: str, save: bool = True):
         if mode not in MAGNET_MODES:
             mode = "off"
-        self.chart.layer.magnet = mode
+        for p in self.panes:
+            p.chart.layer.magnet = mode
         self.magnet_btn.setChecked(mode != "off")
         self._magnet_actions[mode].setChecked(True)
         self.magnet_btn.setToolTip(f"Imán: {MAGNET_MODES[mode]}\nClic para encender/apagar · flechita para elegir el modo")
@@ -515,16 +718,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_magnet("off" if on else self.cfg.get("magnet_last", "weak"))
 
     def _on_tool(self, key):
-        self.chart.layer.set_tool(key)
-        if key == "cursor":
-            self.chart.unsetCursor()
-        else:
-            self.chart.setCursor(QtCore.Qt.CrossCursor)
+        for p in self.panes:  # se dibuja en la gráfica donde se haga clic
+            p.chart.layer.set_tool(key)
+            if key == "cursor":
+                p.chart.unsetCursor()
+            else:
+                p.chart.setCursor(QtCore.Qt.CrossCursor)
+        if key != "cursor":
             tip = dict((k, t) for k, _, t in TOOLS)[key]
             self.statusBar().showMessage(f"{tip}  ·  Esc o clic derecho para cancelar", 6000)
 
     def _set_draw_color(self, color):
-        self.chart.layer.color = color
+        for p in self.panes:
+            p.chart.layer.color = color
         self.color_btn.setStyleSheet(f"color:{color}; font-size:20px;")
         self.cfg["draw_color"] = color
 
@@ -535,13 +741,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self._save()
 
     def _set_draw_width(self, wv, btn):
-        self.chart.layer.width = wv
+        for p in self.panes:
+            p.chart.layer.width = wv
         btn.setText(f"{wv}px")
         self.cfg["draw_width"] = wv
 
-    def _save_drawings(self):
-        if self.symbol:
-            self.cfg.setdefault("drawings", {})[self.symbol] = self.chart.layer.drawings
+    def _save_drawings(self, pane: ChartPane):
+        if pane.symbol:
+            store = self.cfg.setdefault("drawings", {})
+            store[pane.symbol] = pane.chart.layer.drawings
+            for p in self.panes:  # los dibujos son del símbolo: se ven en todas sus gráficas
+                if p is not pane and p.symbol == pane.symbol:
+                    p.chart.layer.set_drawings(list(store[pane.symbol]))
             self._save()
 
     def _clear_drawings(self):
@@ -672,7 +883,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # el resto de los atajos están en las acciones del menú (_build_menu)
         for seq, fn in [
             ("Esc", lambda: self._tool_actions["cursor"].trigger()),
-            ("Ctrl+Z", self.chart.layer.undo),
+            ("Ctrl+Z", lambda: self.chart.layer.undo()),
         ]:
             QtGui.QShortcut(QtGui.QKeySequence(seq), self, activated=fn)
 
@@ -889,9 +1100,10 @@ class MainWindow(QtWidgets.QMainWindow):
         return out
 
     # ======================================================== carga
-    def _set_period(self, key):
-        self.period_key = key
-        if getattr(self, "_range_btns", None):
+    def _set_period(self, key, pane=None):
+        pane = pane or self.active
+        pane.period_key = key
+        if pane is self.active and getattr(self, "_range_btns", None):
             self._range_group.setExclusive(False)
             for k, b in self._range_btns.items():
                 b.setChecked(k == key)
@@ -899,7 +1111,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_range(self, key):
         self._set_period(key)
-        self.load(self.symbol, raw=True)
+        self.load(self.active.want, raw=True)
+        if self.sync["interval"] or self.sync["time"]:  # sin la misma historia no podrían verse iguales
+            for p in self.panes:
+                if p is not self.active:
+                    self._set_period(key, p)
+                    self.load(p.want, raw=True, silent=True, pane=p)
 
     def _sync_interval_buttons(self, label):
         self._interval_group.setExclusive(False)
@@ -914,22 +1131,47 @@ class MainWindow(QtWidgets.QMainWindow):
             b.setEnabled(data.clamp_period(yi, k) == k)
 
     def _on_interval(self, label):
+        if self._syncing_ui:
+            return
         self._sync_interval_buttons(label)
         self._sync_range_enabled(label)
+        self.active.interval = label
         self._set_period(data.INTERVALS[label][3])
-        self.load(self.symbol, raw=True)
+        self.load(self.active.want, raw=True)
+        if self.sync["interval"]:
+            for p in self.panes:
+                if p is not self.active:
+                    p.interval = label
+                    self._set_period(data.INTERVALS[label][3], p)
+                    self.load(p.want, raw=True, silent=True, pane=p)
 
-    def load(self, text, raw=False, keep_view=False, silent=False, by_name=False):
-        """Carga un símbolo. ``by_name``: si no existe tal cual, se busca por nombre y se abre el primero."""
+    def _on_chart_type(self, chart_type):
+        if not self._syncing_ui:
+            self.active.chart_type = chart_type
+            self.redraw(keep_view=True)
+            self._save()
+
+    def _on_log(self, on):
+        if not self._syncing_ui:
+            self.active.log = on
+            self.redraw(keep_view=True)
+            self._save()
+
+    def load(self, text, raw=False, keep_view=False, silent=False, by_name=False, pane=None):
+        """Carga un símbolo en una gráfica (por omisión, la activa).
+        ``by_name``: si no existe tal cual, se busca por nombre y se abre el primero."""
+        pane = pane or self.active
         sym = " ".join(text.upper().split())  # «aapl / ^gspc» -> «AAPL / ^GSPC»
         if not sym:
             return
-        same = sym == self.symbol
-        self.sym_edit.setText(sym)
-        interval = self.interval.currentText()
-        period = self.period_key
-        self._req += 1
-        req = self._req
+        same = sym == pane.symbol
+        pane.want = sym  # cambiar de intervalo o refrescar mientras carga no debe volver al símbolo anterior
+        if pane is self.active:
+            self.sym_edit.setText(sym)
+        interval = pane.interval
+        period = pane.period_key
+        pane._req += 1
+        req = pane._req
         if not silent:
             self.statusBar().showMessage(f"Descargando {sym} ({interval})…")
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.BusyCursor)
@@ -938,49 +1180,61 @@ class MainWindow(QtWidgets.QMainWindow):
         def done(res, req=req, sym=sym, keep=keep, silent=silent):
             if not silent:
                 QtWidgets.QApplication.restoreOverrideCursor()
-            if req != self._req:
+            if req != pane._req:
                 return
             df, meta, used = res
-            changed = sym != self.symbol
-            self.df, self.meta, self.symbol = df, meta, sym
+            changed = sym != pane.symbol
+            pane.df, pane.meta, pane.symbol = df, meta, sym
             self._remember_name(sym, meta)
-            if changed or not silent:
+            if pane is self.active and (changed or not silent):
                 self._refresh_analysis()
             if not silent and sym in getattr(self, "_watch_items", {}):
                 # el renglón de la lista muestra el mismo precio que la gráfica recién cargada
                 run_task(data.quotes, [sym], on_done=self._show_quotes)
             if used != period:
-                self._set_period(used)
-                self.statusBar().showMessage(
-                    f"Yahoo limita la historia para {interval}; se usó el periodo «{used}».", 8000)
-            if self.comparisons:
-                self._load_comparisons(keep)  # dibuja cuando lleguen, sin parpadeo
+                self._set_period(used, pane)
+                if pane is self.active:
+                    self.statusBar().showMessage(
+                        f"Yahoo limita la historia para {interval}; se usó el periodo «{used}».", 8000)
+            if pane.comparisons:
+                self._load_comparisons(keep, pane)  # dibuja cuando lleguen, sin parpadeo
             else:
-                self._comp_closes = {}
-                self.redraw(keep_view=keep)
+                pane._comp_closes = {}
+                self.redraw(keep_view=keep, pane=pane)
+            if changed and pane is self.active and self.sync["symbol"]:
+                # solo cuando el símbolo ya cargó: uno equivocado no se lleva a las demás gráficas
+                for p in self.panes:
+                    if p is not pane and p.symbol != sym:
+                        self.load(sym, raw=True, silent=True, pane=p)
             self._save()
 
         def fail(err, req=req, sym=sym, silent=silent):
             if not silent:
                 QtWidgets.QApplication.restoreOverrideCursor()
-            if req != self._req:
+            if req != pane._req:
                 return
+            pane.want = pane.symbol or sym  # se queda en lo último que sí cargó
             if by_name:  # «walmex», «bitcoin»…: se busca por nombre y se abre el mejor resultado
                 def found(rows, req=req):
-                    if req == self._req and rows:
-                        self.load(rows[0]["symbol"], raw=True)
-                    elif req == self._req:
+                    if req == pane._req and rows:
+                        self.load(rows[0]["symbol"], raw=True, pane=pane)
+                    elif req == pane._req:
                         QtWidgets.QMessageBox.warning(self, "No se encontró", f"No encontré nada para «{sym}».")
-                        self.sym_edit.setText(self.symbol)
+                        if pane is self.active:
+                            self.sym_edit.setText(pane.symbol)
                 self.statusBar().showMessage(f"Buscando «{sym}» por nombre…")
                 run_task(data.search, sym, on_done=found, on_fail=lambda e: found([]))
                 return
             self.statusBar().showMessage(f"Error al cargar {sym}: {err}", 15000)
+            if pane.df is None:  # sin esto, la gráfica quedaría vacía sin decir por qué
+                pane.header.setText(f"<b style='color:#ffffff'>{sym}</b>&nbsp;&nbsp;"
+                                    f"<span style='color:{DOWN}'>no se pudo cargar</span>")
             if not silent:
                 QtWidgets.QMessageBox.warning(self, "No se pudo cargar", f"{sym}\n\n{err}")
-            self.sym_edit.setText(self.symbol)
+            if pane is self.active:
+                self.sym_edit.setText(pane.symbol or sym)
 
-        run_task(data.load, sym, interval, period, on_done=done, on_fail=fail)
+        self._fetch(sym, interval, period, done, fail)
 
     # ======================================================== comparar
     def _fill_compare_menu(self):
@@ -1020,28 +1274,29 @@ class MainWindow(QtWidgets.QMainWindow):
     def remove_comparison(self, sym: str):
         if sym in self.comparisons:
             self.comparisons.remove(sym)
-            self._comp_closes.pop(sym, None)
+            self.active._comp_closes.pop(sym, None)
             self._update_compare_button()
             self._save()
             self.redraw(keep_view=bool(self.comparisons))
 
     def clear_comparisons(self):
         self.comparisons.clear()
-        self._comp_closes = {}
+        self.active._comp_closes = {}
         self._update_compare_button()
         self._save()
         self.redraw()
 
-    def _load_comparisons(self, keep=False):
+    def _load_comparisons(self, keep=False, pane=None):
         """Descarga los símbolos a comparar con el mismo intervalo y periodo, y luego dibuja todo junto."""
-        syms = [s for s in self.comparisons if s != self.symbol]
-        req, interval, period = self._req, self.interval.currentText(), self.period_key
+        pane = pane or self.active
+        syms = [s for s in pane.comparisons if s != pane.symbol]
+        req, interval, period = pane._req, pane.interval, pane.period_key
 
         def done(res, req=req):
-            if req != self._req:
+            if req != pane._req:
                 return
-            self._comp_closes = {s: v for s, v in res.items() if not isinstance(v, str)}
-            self.redraw(keep_view=keep)
+            pane._comp_closes = {s: v for s, v in res.items() if not isinstance(v, str)}
+            self.redraw(keep_view=keep, pane=pane)
             errs = [f"{s} ({v})" for s, v in res.items() if isinstance(v, str)]
             if errs:
                 self.statusBar().showMessage("No se pudo comparar con " + "; ".join(errs), 12000)
@@ -1050,45 +1305,54 @@ class MainWindow(QtWidgets.QMainWindow):
             done({})
             return
         self.statusBar().showMessage(f"Descargando {', '.join(syms)} para comparar…")
-        run_task(data.load_closes, syms, self.df.index, interval, period, on_done=done,
-                 on_fail=lambda e, req=req: done({}) if req == self._req else None)
+        run_task(data.load_closes, syms, pane.df.index, interval, period, on_done=done,
+                 on_fail=lambda e, req=req: done({}) if req == pane._req else None)
 
-    def redraw(self, keep_view=False):
-        if self.df is None:
+    def redraw(self, keep_view=False, pane=None):
+        pane = pane or self.active
+        if pane.df is None:
             return
+        df = pane.df
         computed, errors = [], []
-        for i, a in enumerate(self.indicators):
+        for i, a in enumerate(pane.indicators):
             try:
-                c = compute(a["key"], a.get("params"), self.df, a.get("color"))
+                c = compute(a["key"], a.get("params"), df, a.get("color"))
                 c.index, c.hidden = i, bool(a.get("hidden"))
                 computed.append(c)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{REGISTRY[a['key']].abbr}: {e}")
-        interval = self.interval.currentText()
+        interval = pane.interval
         intraday = data.INTERVALS[interval][2]
-        self.chart.layer.drawings = list(self.cfg.setdefault("drawings", {}).get(self.symbol, []))
-        chart_type = self.ctype.currentText()
-        if chart_type in ("Velas", "Heikin Ashi", "Barras OHLC") and (self.df["High"] == self.df["Low"]).all():
+        chart = pane.chart
+        chart.layer.drawings = list(self.cfg.setdefault("drawings", {}).get(pane.symbol, []))
+        chart_type = pane.chart_type
+        if chart_type in ("Velas", "Heikin Ashi", "Barras OHLC") and (df["High"] == df["Low"]).all():
             chart_type = "Línea"  # series de un solo valor por fecha (M2, tasas sin agrupar…)
-        comps = [(s, self._comp_closes[s], COMPARE_COLORS[k % len(COMPARE_COLORS)])
-                 for k, s in enumerate(self.comparisons)
-                 if s in self._comp_closes and len(self._comp_closes[s]) == len(self.df)]
-        self.chart.set_data(self.df, computed, chart_type, intraday=intraday,
-                            keep_view=keep_view, title=self.symbol, log=self.log_scale.isChecked(),
-                            comparisons=comps)
-        self._update_alert_lines()
+        comps = [(s, pane._comp_closes[s], COMPARE_COLORS[k % len(COMPARE_COLORS)])
+                 for k, s in enumerate(pane.comparisons)
+                 if s in pane._comp_closes and len(pane._comp_closes[s]) == len(df)]
+        chart.set_data(df, computed, chart_type, intraday=intraday,
+                       keep_view=keep_view, title=pane.symbol, log=pane.log,
+                       comparisons=comps)
+        self._update_alert_lines(pane)
         try:
-            self.chart.set_countdown(data.candle_end(self.df, self.meta, interval))
+            chart.set_countdown(data.candle_end(df, pane.meta, interval))
         except Exception:  # noqa: BLE001 - sin cuenta regresiva si Yahoo no da el horario
-            self.chart.set_countdown(None)
-        self._update_header(intraday)
-        msg = f"{self.symbol} · {len(self.df)} velas · {interval} · actualizado {dt.datetime.now():%H:%M:%S}"
-        if errors:
-            msg += "  ·  Errores: " + "; ".join(errors)
-        self.statusBar().showMessage(msg)
+            chart.set_countdown(None)
+        self._update_header(intraday, pane)
+        if self.sync["time"]:  # recargar no debe desalinear las gráficas
+            if pane is self.active:
+                self._align_view(pane, [p for p in self.panes if p is not pane])
+            else:
+                self._align_view(self.active, [pane])
+        if pane is self.active:
+            msg = f"{pane.symbol} · {len(df)} velas · {interval} · actualizado {dt.datetime.now():%H:%M:%S}"
+            if errors:
+                msg += "  ·  Errores: " + "; ".join(errors)
+            self.statusBar().showMessage(msg)
 
-    def _update_header(self, intraday):
-        m, df = self.meta, self.df
+    def _update_header(self, intraday, pane):
+        m, df = pane.meta, pane.df
         name = m.get("longName") or m.get("shortName") or ""
         cur = m.get("currency", "")
         exch = m.get("fullExchangeName") or m.get("exchangeName") or ""
@@ -1103,12 +1367,17 @@ class MainWindow(QtWidgets.QMainWindow):
         chg = last - prev
         pct = chg / prev * 100 if prev else 0
         col = UP if chg >= 0 else DOWN
-        self.header.setText(
-            f"<b style='color:#ffffff'>{self.symbol}</b>&nbsp;&nbsp;<span style='color:#d1d4dc'>{name}</span>"
-            f"&nbsp;&nbsp;<span style='color:#787b86'>{' · '.join(x for x in (exch, cur) if x)}</span>&nbsp;&nbsp;&nbsp;"
-            f"<b style='color:#ffffff; font-size:17px'>{fmt_price(last)}</b>&nbsp;"
-            f"<span style='color:{col}'>{fmt_change(chg)} ({pct:+.2f}%)</span>")
-        self.setWindowTitle(f"{self.symbol} {fmt_price(last)} — ChartView")
+        if pane.compact:  # varias gráficas: poco ancho, y cada una puede tener otro intervalo
+            middle = f"<span style='color:#787b86'>{pane.interval}</span>&nbsp;&nbsp;"
+            price = f"<b style='color:#ffffff'>{fmt_price(last)}</b>&nbsp;"
+        else:
+            middle = (f"<span style='color:#d1d4dc'>{name}</span>&nbsp;&nbsp;"
+                      f"<span style='color:#787b86'>{' · '.join(x for x in (exch, cur) if x)}</span>&nbsp;&nbsp;&nbsp;")
+            price = f"<b style='color:#ffffff; font-size:17px'>{fmt_price(last)}</b>&nbsp;"
+        pane.header.setText(f"<b style='color:#ffffff'>{pane.symbol}</b>&nbsp;&nbsp;{middle}{price}"
+                            f"<span style='color:{col}'>{fmt_change(chg)} ({pct:+.2f}%)</span>")
+        if pane is self.active:
+            self.setWindowTitle(f"{pane.symbol} {fmt_price(last)} — ChartView")
 
     # ======================================================== indicadores
     def open_indicators(self):
@@ -1202,21 +1471,30 @@ class MainWindow(QtWidgets.QMainWindow):
             self.quote_timer.start(5 * 60 * 1000)
         self._save()
 
-    def _save_pane_heights(self):
-        self.cfg["pane_heights"] = dict(self.chart.pane_heights)
-        self._save()
+    def _remember_sizes(self):
+        """Tamaños de los divisores del diseño actual (solo con la ventana a la vista, ya tienen medida)."""
+        sizes = [sp.sizes() for sp in self._splitters]
+        if self.isVisible() and sizes and all(sum(s) for s in sizes):
+            self.cfg.setdefault("layout_sizes", {})[self.layout_kind] = sizes
 
     def _save(self):
+        self._remember_sizes()
+        a = self.active
         self.cfg.update({
-            "symbol": self.symbol or self.cfg.get("symbol"),
-            "interval": self.interval.currentText(),
-            "period": self.period_key,
-            "comparisons": self.comparisons,
-            "chart_type": self.ctype.currentText(),
-            "log_scale": self.log_scale.isChecked(),
+            "symbol": a.symbol or self.cfg.get("symbol"),
+            "interval": a.interval,
+            "period": a.period_key,
+            "comparisons": a.comparisons,
+            "chart_type": a.chart_type,
+            "log_scale": a.log,
             "auto_refresh": self.auto.isChecked(),
             "refresh_secs": self.auto_every.currentData(),
-            "indicators": self.indicators,
+            "indicators": a.indicators,
+            "pane_heights": dict(a.chart.pane_heights),
+            "charts": [p.state() for p in self.panes] + self._parked,
+            "layout": self.layout_kind,
+            "active_chart": self.panes.index(a),
+            "sync": self.sync,
         })
         config.save(self.cfg)
 
@@ -1289,13 +1567,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_alerts_changed(self):
         self._restart_alert_timer()
         self._update_alert_button()
-        self._update_alert_lines()
+        for p in self.panes:
+            self._update_alert_lines(p)
         self._save()
 
-    def _update_alert_lines(self):
+    def _update_alert_lines(self, pane):
         levels = [(a["value"], alerts.describe(a)) for a in self.cfg.get("alerts", [])
-                  if a.get("enabled") and a["symbol"] == self.symbol and a["type"] in alerts.PRICE_LEVEL_TYPES]
-        self.chart.set_alert_lines(levels)
+                  if a.get("enabled") and a["symbol"] == pane.symbol and a["type"] in alerts.PRICE_LEVEL_TYPES]
+        pane.chart.set_alert_lines(levels)
 
     def check_alerts(self):
         active = [a for a in self.cfg.get("alerts", []) if a.get("enabled")]

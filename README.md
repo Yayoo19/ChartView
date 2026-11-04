@@ -63,6 +63,16 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
 - **Menú:** Archivo (buscar, importar CSV, guardar imagen), Ver (listas, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
+### Varias gráficas
+
+- **Diseño:** el botón de cuadrícula arriba a la derecha (o Ver → Diseño de gráficas) acomoda de 1 a 8 gráficas en columnas, filas o cuadrícula. Arrastra el borde entre dos gráficas para cambiar su tamaño. La app recuerda el diseño, los tamaños y cada gráfica.
+- **Gráfica activa:** la del borde azul; se elige con un clic. La barra superior, los rangos, Indicadores, Comparar, el panel de análisis y la lista de seguimiento actúan sobre ella. El símbolo, el intervalo, el periodo, el tipo, la escala log, los indicadores y las comparaciones son propios de cada gráfica.
+- **Al agregar gráficas:** una nueva empieza como copia de la activa. Si reduces el diseño, las que sobran se guardan y regresan al volver a ampliarlo.
+- **Sincronizar** (en el mismo botón): símbolo, intervalo, cursor (encendido por omisión) y rango de tiempo. Sincronizar el rango también lleva a todas el periodo que elijas abajo de la gráfica. Un símbolo solo pasa a las demás cuando ya cargó, así que uno mal escrito no las afecta.
+- **Cursor y rango entre mercados:** se alinean por la hora que muestra cada gráfica. Yahoo da la hora de cada bolsa y Binance la UTC, así que en intradía entre mercados distintos pueden diferir unas horas.
+- **Dibujos:** son del símbolo, así que aparecen en todas las gráficas que lo muestren. La barra de dibujo es una sola: elige la herramienta y dibuja en la gráfica que quieras.
+- **Actualización:** ⟳ y Auto actualizan todas las gráficas; las que muestran lo mismo comparten una sola descarga. Con muchas gráficas distintas y Auto muy frecuente, Yahoo podría limitar las peticiones.
+
 ### Datos macro
 
 - **Catálogo de la Fed** (sin registro): M2 y M1 (H.6, mensual desde 1959), balance de la Fed (H.4.1, semanal desde 2002), tasas del Tesoro y fondos federales (H.15, diario) y los diferenciales de la curva.

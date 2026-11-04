@@ -309,6 +309,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     legendAction = QtCore.Signal(str, int)  # ("cfg" | "hide" | "del", índice del indicador)
     compareRemoved = QtCore.Signal(str)     # ✕ en una comparación de la leyenda
     panesResized = QtCore.Signal()          # cambió la altura de los paneles (para guardarla)
+    cursorTime = QtCore.Signal(float)       # fecha (epoch) bajo el cursor; NaN si salió de la gráfica
+    rangeChanged = QtCore.Signal()          # el usuario movió o acercó el eje de tiempo
     pane_heights: dict = {}  # valor de clase: pyqtgraph llama a resizeEvent antes de terminar __init__
 
     def __init__(self, parent=None):
@@ -325,6 +327,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._fixed: set = set()
         self._intraday = False
         self.default_bars = 150
+        self.watermark_size = 44  # puntos del símbolo de fondo (menor con varias gráficas)
+        self._synced_range = None  # último rango puesto por sincronización (no se reenvía)
         self.grid_alpha = 0.22  # opacidad de la cuadrícula del fondo (0 = sin cuadrícula)
         # ajuste manual de los paneles inferiores; se guarda por indicador porque la gráfica
         # se reconstruye en cada actualización
@@ -559,6 +563,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._ytag.show()
         self._ytag.raise_()
 
+        self._show_date_tag(plot, i)
+
+    def _show_date_tag(self, plot, i: int):
         n = len(self.df)
         if not 0 <= i < n:  # zona sin velas (p. ej. la nube de Ichimoku proyectada)
             self._xtag.hide()
@@ -708,6 +715,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for p in list(self.plots):
             try:
                 p.getViewBox().sigXRangeChanged.disconnect(self._on_xrange)
+                if p is self.plots[0]:
+                    p.getViewBox().sigXRangeChanged.disconnect(self._emit_range)
             except (RuntimeError, TypeError):
                 pass
         self.clear()
@@ -778,7 +787,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if title:
             wm = pg.TextItem(title, color="#ffffff12", anchor=(0.5, 0.5))
             f = QtGui.QFont()
-            f.setPointSize(44)
+            f.setPointSize(self.watermark_size)
             f.setBold(True)
             wm.setFont(f)
             wm.setParentItem(main.getViewBox())
@@ -854,6 +863,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._on_xrange()
         self.layer.set_context(main, self.plots[1:], df, log, pct_base)
         self._update_labels(n - 1)
+        self._synced_range = None
+        # se conecta al final: armar la gráfica no cuenta como un movimiento del usuario
+        main.getViewBox().sigXRangeChanged.connect(self._emit_range)
 
     def set_alert_lines(self, levels: list[tuple[float, str]]):
         """Líneas punteadas naranjas con 🔔 para las alertas de precio del símbolo actual."""
@@ -899,6 +911,62 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if self.plots and self.df is not None:
             self.plots[0].setXRange(-2, len(self.df) + 2, padding=0)
 
+    def set_compact(self, compact: bool):
+        """Símbolo de fondo más chico cuando hay varias gráficas en la ventana."""
+        self.watermark_size = 24 if compact else 44
+        wm = getattr(self, "_watermark", (None, None))[0]
+        if wm is not None:
+            f = wm.textItem.font()
+            f.setPointSize(self.watermark_size)
+            wm.setFont(f)
+            self._place_watermark()
+
+    # ------------------------------------------------------- sincronización
+    def visible_times(self):
+        """(inicio, fin) de lo que se ve, en fechas epoch; None si aún no hay datos."""
+        if not self.plots or self.df is None or not len(self.df):
+            return None
+        x0, x1 = self.plots[0].getViewBox().viewRange()[0]
+        return float(self.layer.x2t(x0)), float(self.layer.x2t(x1))
+
+    def show_times(self, t0: float, t1: float):
+        """Muestra ese rango de fechas sin avisar de vuelta a las demás gráficas."""
+        if not self.plots or self.df is None or not len(self.df):
+            return
+        vb = self.plots[0].getViewBox()
+        self._synced_range = "aplicando"
+        self.plots[0].setXRange(self.layer.t2x(t0), self.layer.t2x(t1), padding=0)
+        self._synced_range = tuple(vb.viewRange()[0])  # ya con los límites de esta gráfica aplicados
+
+    def _emit_range(self, *_a):
+        s = self._synced_range
+        if s == "aplicando":
+            return
+        if s is not None and np.allclose(self.plots[0].getViewBox().viewRange()[0], s):
+            return  # el eco de show_times, si pyqtgraph lo avisa hasta el siguiente dibujado
+        self._synced_range = None
+        self.rangeChanged.emit()
+
+    def show_cursor_at(self, t: float):
+        """Cursor puesto desde otra gráfica: línea vertical y valores de la vela que contiene esa fecha."""
+        if not self.plots or self.df is None or not len(self.df):
+            return
+        if not np.isfinite(t):
+            self.clear_cursor()
+            return
+        ts = self.layer._ts
+        if not len(ts):
+            return
+        inside = ts[0] <= t <= ts[-1]
+        i = int(np.searchsorted(ts, t, "right")) - 1 if inside else int(round(self.layer.t2x(t)))
+        for v, h in self._cross.values():
+            v.setPos(i)
+            v.show()
+            h.hide()
+        self._ytag.hide()
+        self._show_date_tag(self.plots[0], i)
+        self._update_labels(i)
+
     def _on_xrange(self, *args):
         if not self.plots:
             return
@@ -942,9 +1010,14 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             h.setVisible(p is hovered)
         self._show_tags(hovered, pos, pt.y(), i)
         self._update_labels(i)
+        self.cursorTime.emit(float(self.layer.x2t(i)))
 
     def leaveEvent(self, ev):
         super().leaveEvent(ev)
+        self.clear_cursor()
+        self.cursorTime.emit(float("nan"))
+
+    def clear_cursor(self):
         self._hide_tags()
         for v, h in self._cross.values():
             v.hide()
