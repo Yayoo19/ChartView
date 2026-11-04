@@ -40,6 +40,8 @@ INTERVALS = {
     "1 hora": ("60m", None, True, "6mo"),
     "4 horas": ("60m", "4h", True, "1y"),
     "1 día": ("1d", None, False, "2y"),
+    "2 días": ("1d", "2D", False, "5y"),
+    "3 días": ("1d", "3D", False, "5y"),
     "1 semana": ("1wk", None, False, "10y"),
     "2 semanas": ("1wk", "2W", False, "10y"),
     "1 mes": ("1mo", None, False, "max"),
@@ -176,6 +178,33 @@ def _group_weeks(df: pd.DataFrame, weeks: int) -> pd.DataFrame:
     return out
 
 
+# Binance cuenta sus velas de 3 días desde que listó cada par: esta fecha coincide con BTC y ETH, no con todos
+_DAY0_CRYPTO = np.datetime64("1970-01-02", "D")
+_DAY0_MARKET = np.datetime64("1970-01-05", "D")  # un lunes
+
+
+def _group_days(df: pd.DataFrame, days: int, crypto: bool = False) -> pd.DataFrame:
+    """Agrupa velas diarias en bloques de ``days`` días, contados desde una fecha fija para que
+    no cambien al recargar o al elegir otro periodo. Cada vela queda fechada al inicio de su bloque.
+
+    Cripto opera todos los días y cuenta días de calendario. Los demás mercados cuentan días hábiles:
+    con días de calendario, un bloque podría caer en fin de semana o tener una sola sesión.
+    """
+    dates = df.index.values.astype("datetime64[D]")
+    if crypto:
+        key = (dates - _DAY0_CRYPTO).astype(int) // days
+    else:
+        key = np.busday_count(_DAY0_MARKET, dates) // days
+    out = df.groupby(key).agg(_OHLCV).dropna(subset=["Close"])
+    slots = out.index.to_numpy() * days
+    if crypto:
+        starts = _DAY0_CRYPTO + slots.astype("timedelta64[D]")
+    else:
+        starts = np.busday_offset(_DAY0_MARKET, slots)
+    out.index = pd.DatetimeIndex(starts)
+    return out
+
+
 def _series_to_ohlc(s: pd.Series, interval_label: str, period: str) -> pd.DataFrame:
     """Convierte una serie de valores (macro) en velas del intervalo pedido.
 
@@ -188,7 +217,9 @@ def _series_to_ohlc(s: pd.Series, interval_label: str, period: str) -> pd.DataFr
     elif _PERIOD_DAYS.get(period, 10 ** 7) < 10 ** 6:
         s = s[s.index >= s.index[-1] - pd.Timedelta(days=_PERIOD_DAYS[period])]
     df = pd.DataFrame({"Open": s, "High": s, "Low": s, "Close": s, "Volume": 0.0})
-    if interval_label in ("1 semana", "2 semanas"):
+    if interval_label in ("2 días", "3 días"):
+        df = _group_days(df.dropna(subset=["Close"]), int(INTERVALS[interval_label][1][:-1]))
+    elif interval_label in ("1 semana", "2 semanas"):
         df = df.resample("W-MON", label="left", closed="left").agg(_OHLCV)
         if interval_label == "2 semanas":
             df = _group_weeks(df.dropna(subset=["Close"]), 2)
@@ -271,6 +302,8 @@ def _load_expr(expr, interval_label: str, period: str):
 
 def _span(rule, yi, start: pd.Timestamp) -> pd.DateOffset:
     """Duración de una vela de varios días que empieza en ``start``."""
+    if rule and rule.endswith("D"):
+        return pd.DateOffset(days=int(rule[:-1]))
     if rule and rule.endswith("M"):
         return pd.DateOffset(months=int(rule[:-1]))
     if rule and rule.endswith("W"):
@@ -331,7 +364,10 @@ def candle_end(df: pd.DataFrame, meta: dict, interval_label: str):
         elif reg_end is None:
             return None
         else:
-            day = _last_weekday(last.tz_localize(None) + _span(rule, yi, last) - pd.Timedelta(days=1))
+            if rule and rule.endswith("D"):  # estas velas cuentan días hábiles
+                day = pd.Timestamp(np.busday_offset(last.tz_localize(None).date(), int(rule[:-1]) - 1))
+            else:
+                day = _last_weekday(last.tz_localize(None) + _span(rule, yi, last) - pd.Timedelta(days=1))
             end = _close_on(day, reg_end, tz)
             if pd.isna(end):
                 return None
@@ -392,7 +428,9 @@ def load(symbol: str, interval_label: str, period: str):
             if not got:
                 raise
             df, meta = got[:2]
-    if rule and rule.endswith("M"):
+    if rule and rule.endswith("D"):
+        df = _group_days(df, int(rule[:-1]), meta.get("instrumentType") == "CRYPTOCURRENCY")
+    elif rule and rule.endswith("M"):
         df = _group_months(df, int(rule[:-1]))
     elif rule and rule.endswith("W"):
         df = _group_weeks(df, int(rule[:-1]))
