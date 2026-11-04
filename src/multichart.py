@@ -106,6 +106,8 @@ class ChartPane(QtWidgets.QFrame):
         self.period_key = state.get("period") or "2y"
         self.chart_type = state.get("chart_type") or "Velas"
         self.log = bool(state.get("log"))
+        self.pct = bool(state.get("pct")) and not self.log
+        self.chart_params = dict(state.get("chart_params") or {})  # tipo de gráfica -> sus ajustes
         self.indicators = [a for a in state.get("indicators") or [] if a.get("key") in REGISTRY]
         self.comparisons = list(state.get("comparisons") or [])
         self._comp_closes: dict = {}  # símbolo -> cierres alineados a self.df
@@ -154,7 +156,8 @@ class ChartPane(QtWidgets.QFrame):
 
     def state(self) -> dict:
         return {"symbol": self.symbol or self.want, "interval": self.interval, "period": self.period_key,
-                "chart_type": self.chart_type, "log": self.log, "indicators": self.indicators,
+                "chart_type": self.chart_type, "log": self.log, "pct": self.pct,
+                "chart_params": self.chart_params, "indicators": self.indicators,
                 "comparisons": self.comparisons, "pane_heights": dict(self.chart.pane_heights)}
 
     def retire(self):

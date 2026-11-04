@@ -86,17 +86,24 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - Rueda del mouse: zoom en el tiempo · arrastrar: desplazar · el eje Y se ajusta solo.
 - **Indicadores** (Ctrl+I): catálogo por categorías, parámetros editables, color y orden. La flecha del botón agrega un indicador directo con valores por defecto.
 - **Leyenda de la gráfica:** al pasar el mouse sobre un indicador (por ejemplo "EMA 20") aparecen ⚙ configurar, 👁 ocultar/mostrar y ✕ quitar; con clic derecho, el mismo menú. Los ocultos quedan en gris para volver a mostrarlos.
-- Tipos de gráfica: velas, Heikin Ashi, barras OHLC, línea y área.
+- Tipos de gráfica: velas, velas huecas, Heikin Ashi, barras OHLC, línea, área, línea base, Renko, Kagi, Point & Figure y Line Break.
+  - **Línea base:** verde arriba y rojo abajo de la mitad del rango visible.
+  - **Renko, Kagi, Point & Figure y Line Break** no siguen el tiempo: los indicadores y dibujos se calculan sobre sus barras, la etiqueta de precio muestra el último precio real y no hay cuenta regresiva. Comparar no aplica en estos tipos. El botón ⚙ junto al tipo ajusta el tamaño del ladrillo o cuadro, la reversa o las líneas; en 0, el tamaño sale del ATR de 14 velas.
+- **%** (abajo de la gráfica o Alt+P): etiqueta el eje en % desde la primera vela visible. Se excluye con Log.
 - **Log** (abajo de la gráfica o Alt+L): escala logarítmica en la gráfica de precio, incluidos los indicadores dibujados sobre ella.
 - Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora, y las de 2 semanas con velas semanales (siempre empiezan en lunes). Las de 2, 3, 6 y 12 meses se arman con velas mensuales, alineadas a bimestres, trimestres, semestres y años del calendario.
 - El panel de listas se puede cerrar con la ✕ o arrastrar a otro lado. Se vuelve a abrir con **☰ Listas** (primer botón de la barra) o Ctrl+B. La app recuerda dónde lo dejaste.
 - Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas. Cada símbolo muestra debajo el nombre de la empresa o serie. Con clic derecho copias un símbolo a otra lista o creas una alerta.
 - **Dibujo** (barra vertical a la izquierda de la gráfica; se oculta y se muestra con **✎ Dibujo** en la barra superior, Ver → Herramientas de dibujo o Ctrl+D):
-  - Herramientas agrupadas: cursor; líneas (horizontal, vertical, tendencia, rayo); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci manual; borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
+  - Herramientas agrupadas: cursor; líneas (horizontal, rayo horizontal, vertical, tendencia, rayo, flecha); canales (canal paralelo, tridente de Andrews); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci (retroceso y extensión por tendencia); trading (medir, posición larga, posición corta, VWAP anclado); borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
+  - **Medir:** Shift+clic (o Shift+arrastrar) en cualquier momento, o la herramienta 📏. Muestra el cambio de precio, el %, las velas y el tiempo. Otro clic o Esc la quita; no se guarda.
+  - **Posición larga o corta:** clic o arrastra hasta el objetivo. Las asas ajustan objetivo, stop y ancho, y la caja muestra el riesgo/beneficio.
+  - **VWAP anclado:** clic en la vela de inicio. Arrastra el asa para cambiarla. Las series sin volumen no lo tienen.
+  - **Canal, tridente y extensión de Fibonacci** se trazan con 3 clics.
   - **Sobre indicadores:** todas las herramientas funcionan también en los paneles inferiores (RSI, MACD, volumen…) para marcar tendencias o formaciones: dibuja en el panel que quieras. Cada dibujo queda ligado a ese indicador y a su valor, y reaparece si lo quitas y lo vuelves a agregar. Las líneas verticales cruzan siempre todos los paneles.
   - **Imán (🧲):** al dibujar, el punto se pega a la apertura, máximo, mínimo o cierre de la vela. En un panel se pega a las líneas del indicador. En modo débil solo si estás cerca; en modo fuerte, siempre. Un clic en 🧲 lo enciende o apaga y la flechita elige el modo. No aplica al dibujo libre.
-  - Con el cursor (↖) puedes mover y redimensionar lo dibujado. Clic derecho sobre un dibujo cambia el color o el grosor, o lo elimina.
-  - Esc cancela la herramienta, Ctrl+Z deshace, 👁 oculta los dibujos y 🗑 los borra todos.
+  - Con el cursor (↖) puedes mover y redimensionar lo dibujado. Clic derecho sobre un dibujo cambia el color o el grosor, lo duplica, lo bloquea o lo elimina. Uno bloqueado no se mueve ni se borra con el borrador.
+  - Esc cancela la herramienta, Ctrl+Z deshace y Ctrl+Y rehace (crear, mover, cambiar de estilo y borrar, por símbolo y mientras la app siga abierta), 👁 oculta los dibujos y 🗑 los borra todos.
   - Se guardan por símbolo, anclados a fecha y precio, así que siguen en su lugar al cambiar el intervalo, el periodo o la escala log.
   - Las imágenes se copian a `%USERPROFILE%\.chartview\images`.
 - **Alertas** (🔔 en la barra o Ctrl+Alt+A):

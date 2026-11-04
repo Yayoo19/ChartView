@@ -6,13 +6,15 @@ from copy import deepcopy
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
+from pyqtgraph.util.garbage_collector import GarbageCollector
 
 from . import alerts, config, data, macro
 from .alerts_ui import AlertsWindow
 from .analysis import AnalysisPanel
-from .chart import CHART_TYPES, DOWN, UP, fmt_change, fmt_price
-from .dialogs import CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
-from .drawings import TOOL_GROUPS, TOOLS
+from .chart import CANDLE_TYPES, CHART_TYPES, DOWN, UP, fmt_change, fmt_price
+from .chart_types import PARAM_SPECS, TRANSFORMED, transform
+from .dialogs import ChartTypeDialog, CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
+from .drawings import TOOL_GROUPS, TOOLS, DrawingHistory
 from .indicators import REGISTRY, by_category, compute
 from .multichart import LAYOUTS, SYNC_OPTIONS, ChartPane, build_grid, chart_count, layout_icon, translate_time
 from .searchbox import SymbolSearch
@@ -39,7 +41,8 @@ SHORTCUTS = [
     ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"), ("Ctrl+D", "Mostrar u ocultar herramientas de dibujo"),
     ("Ctrl+E", "Mostrar u ocultar el panel de análisis"),
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
-    ("Ctrl+Z", "Deshacer último dibujo"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
+    ("Alt+P", "Escala porcentual"), ("Ctrl+Z", "Deshacer en los dibujos"), ("Ctrl+Y", "Rehacer en los dibujos"),
+    ("Shift+clic", "Medir precio, % y velas"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
     ("Ctrl+G", "Encender o apagar la cuadrícula"), ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
 ]
 
@@ -93,6 +96,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._syncing_ui = False  # la barra se está poniendo al día con la gráfica activa: no es una orden
         self._inflight: dict = {}  # descargas en curso: (símbolo, intervalo, periodo) -> quienes la esperan
         self.sync = {k: bool(self.cfg.get("sync", {}).get(k, k == "cursor")) for k, _ in SYNC_OPTIONS}
+        self._draw_history = DrawingHistory()  # compartido: los dibujos son del símbolo, no de la gráfica
         self._create_panes()
 
         self._build_actions()
@@ -152,6 +156,7 @@ class MainWindow(QtWidgets.QMainWindow):
         pane = ChartPane(state, dict(GRID_LEVELS).get(self.cfg.get("grid", "Media"), 0.22))
         pane.activated.connect(self._set_active)
         chart, layer = pane.chart, pane.chart.layer
+        layer.history = self._draw_history
         chart.panesResized.connect(self._save)
         chart.legendAction.connect(lambda act, i, p=pane: (self._set_active(p), self._legend_action(act, i)))
         chart.compareRemoved.connect(lambda sym, p=pane: (self._set_active(p), self.remove_comparison(sym)))
@@ -204,8 +209,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.interval.setCurrentText(a.interval)
             self.ctype.setCurrentText(a.chart_type)
             self.log_scale.setChecked(a.log)
+            self.pct_scale.setChecked(a.pct)
         finally:
             self._syncing_ui = False
+        self._update_chart_params_button()
         self._sync_interval_buttons(a.interval)
         self._sync_range_enabled(a.interval)
         self._set_period(a.period_key)
@@ -357,6 +364,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "Alt+L", True, short="Log")
         self.log_scale.setChecked(self.active.log)
         self.log_scale.toggled.connect(self._on_log)
+        self.pct_scale = action("Escala porcentual", "Eje en % desde la primera vela visible (Alt+P)",
+                                "Alt+P", True, short="%")
+        self.pct_scale.setChecked(self.active.pct)
+        self.pct_scale.toggled.connect(self._on_pct)
         self.auto = action("Actualización automática", "Actualizar la gráfica automáticamente",
                            checkable=True, short="Auto")
         self.auto.setChecked(bool(self.cfg.get("auto_refresh")))
@@ -418,6 +429,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ctype.setCurrentText(self.active.chart_type)
         self.ctype.currentTextChanged.connect(self._on_chart_type)
         tb.addWidget(self.ctype)
+        self.ctype_cfg = QtWidgets.QToolButton()
+        self.ctype_cfg.setText("⚙")
+        self.ctype_cfg.clicked.connect(self._open_chart_params)
+        tb.addWidget(self.ctype_cfg)
+        self._update_chart_params_button()
 
         ind_btn = QtWidgets.QToolButton()
         ind_btn.setText("📈 Indicadores")
@@ -485,7 +501,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._range_btns[key] = b
             h.addWidget(b)
         h.addStretch(1)
-        for act in (self.log_scale, self.auto):
+        for act in (self.log_scale, self.pct_scale, self.auto):
             b = QtWidgets.QToolButton()
             b.setDefaultAction(act)
             h.addWidget(b)
@@ -518,6 +534,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addMenu(self._layout_menu)
         v.addSeparator()
         v.addAction(self.log_scale)
+        v.addAction(self.pct_scale)
         v.addAction(self.fit_act)
         v.addAction(self.recent_act)
         v.addSeparator()
@@ -686,8 +703,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_draw_width(int(self.cfg.get("draw_width", 2)), width_btn)
         bar.addSeparator()
         undo = bar.addAction("↶")
-        undo.setToolTip("Deshacer último dibujo (Ctrl+Z)")
+        undo.setToolTip("Deshacer (Ctrl+Z)")
         undo.triggered.connect(lambda: self.chart.layer.undo())
+        redo = bar.addAction("↷")
+        redo.setToolTip("Rehacer (Ctrl+Y)")
+        redo.triggered.connect(lambda: self.chart.layer.redo())
         self.eye_act = bar.addAction("👁")
         self.eye_act.setToolTip("Mostrar u ocultar dibujos")
         self.eye_act.setCheckable(True)
@@ -879,11 +899,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         run_task(data.fundamentals, sym, on_done=done, on_fail=fail)
 
+    def _on_escape(self):
+        self._tool_actions["cursor"].trigger()
+        for p in self.panes:
+            p.chart.layer.clear_measure()
+
     def _build_shortcuts(self):
         # el resto de los atajos están en las acciones del menú (_build_menu)
         for seq, fn in [
-            ("Esc", lambda: self._tool_actions["cursor"].trigger()),
+            ("Esc", self._on_escape),
             ("Ctrl+Z", lambda: self.chart.layer.undo()),
+            ("Ctrl+Y", lambda: self.chart.layer.redo()),
         ]:
             QtGui.QShortcut(QtGui.QKeySequence(seq), self, activated=fn)
 
@@ -1146,16 +1172,51 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.load(p.want, raw=True, silent=True, pane=p)
 
     def _on_chart_type(self, chart_type):
-        if not self._syncing_ui:
-            self.active.chart_type = chart_type
-            self.redraw(keep_view=True)
+        if self._syncing_ui:
+            return
+        # las barras de Renko, Kagi… no corresponden a las velas: la vista anterior no sirve
+        same_bars = chart_type not in TRANSFORMED and self.active.chart_type not in TRANSFORMED
+        self.active.chart_type = chart_type
+        self._update_chart_params_button()
+        self.redraw(keep_view=same_bars)
+        self._save()
+
+    def _update_chart_params_button(self):
+        specs = PARAM_SPECS.get(self.active.chart_type)
+        self.ctype_cfg.setEnabled(bool(specs))
+        self.ctype_cfg.setToolTip(f"Ajustes de {self.active.chart_type}" if specs else "Este tipo de gráfica no tiene ajustes")
+
+    def _open_chart_params(self):
+        a = self.active
+        specs = PARAM_SPECS.get(a.chart_type)
+        if not specs:
+            return
+        dlg = ChartTypeDialog(a.chart_type, specs, a.chart_params.get(a.chart_type, {}), self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
+            a.chart_params[a.chart_type] = dlg.values()
+            self.redraw()
             self._save()
+
+    def _set_scale(self, log: bool, pct: bool):
+        """Log y % se excluyen entre sí."""
+        a = self.active
+        a.log, a.pct = log, pct
+        self._syncing_ui = True
+        try:
+            self.log_scale.setChecked(log)
+            self.pct_scale.setChecked(pct)
+        finally:
+            self._syncing_ui = False
+        self.redraw(keep_view=True)
+        self._save()
 
     def _on_log(self, on):
         if not self._syncing_ui:
-            self.active.log = on
-            self.redraw(keep_view=True)
-            self._save()
+            self._set_scale(on, False if on else self.active.pct)
+
+    def _on_pct(self, on):
+        if not self._syncing_ui:
+            self._set_scale(False if on else self.active.log, on)
 
     def load(self, text, raw=False, keep_view=False, silent=False, by_name=False, pane=None):
         """Carga un símbolo en una gráfica (por omisión, la activa).
@@ -1312,7 +1373,17 @@ class MainWindow(QtWidgets.QMainWindow):
         pane = pane or self.active
         if pane.df is None:
             return
-        df = pane.df
+        df = source = pane.df
+        chart_type, opts, note = pane.chart_type, {}, ""
+        if chart_type in TRANSFORMED:
+            try:
+                df, opts = transform(source, chart_type, pane.chart_params.get(chart_type))
+                note = f"{chart_type}: {opts['text']}"
+                if df.empty:
+                    raise ValueError("el precio no se movió lo suficiente para formar barras con ese tamaño")
+            except ValueError as e:
+                df, chart_type, opts, note = source, "Velas", {}, f"{chart_type}: {e}; se muestran velas"
+        transformed = df is not source
         computed, errors = [], []
         for i, a in enumerate(pane.indicators):
             try:
@@ -1324,19 +1395,23 @@ class MainWindow(QtWidgets.QMainWindow):
         interval = pane.interval
         intraday = data.INTERVALS[interval][2]
         chart = pane.chart
-        chart.layer.drawings = list(self.cfg.setdefault("drawings", {}).get(pane.symbol, []))
-        chart_type = pane.chart_type
-        if chart_type in ("Velas", "Heikin Ashi", "Barras OHLC") and (df["High"] == df["Low"]).all():
+        chart.layer.bind(pane.symbol, list(self.cfg.setdefault("drawings", {}).get(pane.symbol, [])))
+        if not transformed and chart_type in CANDLE_TYPES and (df["High"] == df["Low"]).all():
             chart_type = "Línea"  # series de un solo valor por fecha (M2, tasas sin agrupar…)
         comps = [(s, pane._comp_closes[s], COMPARE_COLORS[k % len(COMPARE_COLORS)])
                  for k, s in enumerate(pane.comparisons)
                  if s in pane._comp_closes and len(pane._comp_closes[s]) == len(df)]
+        if transformed:
+            comps = []  # los cierres están alineados a las velas, no a estas barras
+            if pane.comparisons:
+                note += " · Comparar no aplica en este tipo de gráfica"
         chart.set_data(df, computed, chart_type, intraday=intraday,
-                       keep_view=keep_view, title=pane.symbol, log=pane.log,
-                       comparisons=comps)
+                       keep_view=keep_view, title=pane.symbol, log=pane.log, comparisons=comps,
+                       pct_scale=pane.pct, last_price=float(source["Close"].iloc[-1]) if transformed else None,
+                       opts=opts)
         self._update_alert_lines(pane)
-        try:
-            chart.set_countdown(data.candle_end(df, pane.meta, interval))
+        try:  # una barra de Renko o Kagi no cierra a una hora: se cierra cuando el precio la completa
+            chart.set_countdown(None if transformed else data.candle_end(df, pane.meta, interval))
         except Exception:  # noqa: BLE001 - sin cuenta regresiva si Yahoo no da el horario
             chart.set_countdown(None)
         self._update_header(intraday, pane)
@@ -1346,7 +1421,9 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self._align_view(self.active, [pane])
         if pane is self.active:
-            msg = f"{pane.symbol} · {len(df)} velas · {interval} · actualizado {dt.datetime.now():%H:%M:%S}"
+            msg = f"{pane.symbol} · {len(df)} {'barras' if transformed else 'velas'} · {interval}"
+            msg += f" · {note}" if note else ""
+            msg += f" · actualizado {dt.datetime.now():%H:%M:%S}"
             if errors:
                 msg += "  ·  Errores: " + "; ".join(errors)
             self.statusBar().showMessage(msg)
@@ -1731,6 +1808,9 @@ def main():
     app.setStyle("Fusion")
     app.setPalette(dark_palette())
     app.setStyleSheet(STYLE)
+    # Python podría recolectar basura en un hilo de descarga y destruir ahí objetos de Qt, lo que
+    # tumba la app: así solo se recolecta en el hilo de la interfaz.
+    collector = GarbageCollector(interval=1.0)  # noqa: F841 - debe seguir vivo mientras corre la app
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

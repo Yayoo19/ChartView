@@ -317,6 +317,35 @@ class IndicatorDialog(QtWidgets.QDialog):
         self._set_buttons()
 
 
+class ChartTypeDialog(QtWidgets.QDialog):
+    """Ajustes de un tipo de gráfica: tamaño del ladrillo, reversa, líneas…"""
+
+    def __init__(self, chart_type: str, specs: list, values: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Ajustes de {chart_type}")
+        form = QtWidgets.QFormLayout(self)
+        self._editors = {}
+        for key, label, default in specs:
+            value = values.get(key, default)
+            if isinstance(default, int):
+                w = QtWidgets.QSpinBox()
+                w.setRange(1, 100)
+            else:
+                w = QtWidgets.QDoubleSpinBox()
+                w.setDecimals(6)
+                w.setRange(0, 1e12)
+            w.setValue(value)
+            form.addRow(label, w)
+            self._editors[key] = w
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def values(self) -> dict:
+        return {k: w.value() for k, w in self._editors.items()}
+
+
 class CompareDialog(QtWidgets.QDialog):
     """Elegir un símbolo para comparar, con el mismo buscador de la barra superior."""
 

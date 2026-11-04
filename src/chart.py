@@ -17,7 +17,9 @@ AXIS = "#2a2e39"
 GRID = "#787b86"
 CROSS = "#9598a1"
 PALETTE = ["#2962ff", "#ff6d00", "#e040fb", "#00bcd4", "#ffd600", "#ec407a", "#76ff03", "#8d6e63", "#90caf9"]
-CHART_TYPES = ["Velas", "Heikin Ashi", "Barras OHLC", "Línea", "Área"]
+CHART_TYPES = ["Velas", "Velas huecas", "Heikin Ashi", "Barras OHLC", "Línea", "Área", "Línea base",
+               "Renko", "Kagi", "Point & Figure", "Line Break"]
+CANDLE_TYPES = ("Velas", "Velas huecas", "Heikin Ashi", "Barras OHLC", "Renko", "Line Break")
 
 pg.setConfigOptions(antialias=True, background=BG, foreground=FG)
 
@@ -98,7 +100,9 @@ def heikin_ashi(df: pd.DataFrame):
 class CandleItem(pg.GraphicsObject):
     """Velas japonesas o barras OHLC pre-renderizadas en un QPicture."""
 
-    def __init__(self, x, o, h, l, c, bars=False):
+    def __init__(self, x, o, h, l, c, bars=False, hollow=False):
+        """``hollow``: velas huecas. El color compara con el cierre anterior y el cuerpo va
+        vacío si la vela cerró arriba de su apertura."""
         super().__init__()
         self._pic = QtGui.QPicture()
         p = QtGui.QPainter(self._pic)
@@ -112,6 +116,20 @@ class CandleItem(pg.GraphicsObject):
                 continue
             xi = float(x[i])
             up = ci >= oi
+            if hollow:
+                prev = c[i - 1] if i else oi
+                p.setPen(pens[bool(ci >= prev)])
+                top, bottom = max(oi, ci), min(oi, ci)
+                if hi > top:  # la mecha no cruza el cuerpo vacío
+                    p.drawLine(QPF(xi, top), QPF(xi, hi))
+                if li < bottom:
+                    p.drawLine(QPF(xi, li), QPF(xi, bottom))
+                if ci == oi:
+                    p.drawLine(QPF(xi - w, oi), QPF(xi + w, oi))
+                else:
+                    p.setBrush(QtCore.Qt.NoBrush if up else brushes[bool(ci >= prev)])
+                    p.drawRect(QtCore.QRectF(xi - w, oi, 2 * w, ci - oi))
+                continue
             p.setPen(pens[up])
             # Qt fusiona en un bloque gigante los rectángulos y líneas de tamaño cero
             # seguidos dentro de un QPicture (p. ej. meses sin cotización, O=H=L=C):
@@ -129,6 +147,141 @@ class CandleItem(pg.GraphicsObject):
         p.end()
         lo, hi = np.nanmin(l) if len(l) else 0, np.nanmax(h) if len(h) else 1
         self._rect = QtCore.QRectF(-1, lo, len(x) + 1, hi - lo)
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self._pic)
+
+    def boundingRect(self):
+        return self._rect
+
+
+class BaselineItem(pg.GraphicsObject):
+    """Línea base: verde arriba del nivel y rojo abajo. El nivel sigue a lo que se ve."""
+
+    def __init__(self, x, y):
+        super().__init__()
+        m = np.isfinite(y)
+        self._pts = [QtCore.QPointF(float(a), float(b)) for a, b in zip(x[m], y[m])]
+        self._base = float(np.nanmean(y)) if m.any() else 0.0
+        lo, hi = (float(y[m].min()), float(y[m].max())) if m.any() else (0.0, 1.0)
+        self._rect = QtCore.QRectF(float(x[0]) - 1 if len(x) else 0, lo, len(x) + 2, max(hi - lo, 1e-12))
+
+    def set_base(self, y: float):
+        if np.isfinite(y) and y != self._base:
+            self._base = float(y)
+            self.update()
+
+    def paint(self, p, *args):
+        if len(self._pts) < 2:
+            return
+        r, base = self._rect, self._base
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        poly = QtGui.QPolygonF(self._pts)
+        area = QtGui.QPolygonF([QtCore.QPointF(self._pts[0].x(), base)] + self._pts
+                               + [QtCore.QPointF(self._pts[-1].x(), base)])
+        left, width = r.left() - 1, r.width() + 2
+        bands = ((QtCore.QRectF(left, base, width, max(r.bottom() - base, 0) + 1), UP),
+                 (QtCore.QRectF(left, r.top() - 1, width, max(base - r.top(), 0) + 1), DOWN))
+        for band, color in bands:
+            p.save()
+            p.setClipRect(band)
+            fill = QtGui.QColor(color)
+            fill.setAlpha(45)
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(fill)
+            p.drawPolygon(area)
+            p.setPen(pg.mkPen(color, width=2))
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawPolyline(poly)
+            p.restore()
+        p.setPen(pg.mkPen("#787b86", width=1, style=QtCore.Qt.DashLine))
+        p.drawLine(QtCore.QPointF(left, base), QtCore.QPointF(left + width, base))
+
+    def boundingRect(self):
+        return self._rect.united(QtCore.QRectF(self._rect.left(), self._base, 1, 0)).adjusted(-1, -1, 1, 1)
+
+
+class KagiItem(pg.GraphicsObject):
+    """Kagi: la línea engruesa (verde) al superar el último hombro y adelgaza (roja) al perder la última cintura."""
+
+    def __init__(self, x, o, c):
+        super().__init__()
+        self._pic = QtGui.QPicture()
+        p = QtGui.QPainter(self._pic)
+        yang_pen, yin_pen = pg.mkPen(UP, width=2.5), pg.mkPen(DOWN, width=1.2)
+        QPF = QtCore.QPointF
+        yang = bool(len(c) and c[0] >= o[0])
+        shoulder = waist = None
+        for i in range(len(x)):
+            a, b, xi = o[i], c[i], float(x[i])
+            if not (np.isfinite(a) and np.isfinite(b)):
+                continue
+            if i:
+                p.setPen(yang_pen if yang else yin_pen)
+                p.drawLine(QPF(float(x[i - 1]), a), QPF(xi, a))
+            # el grosor cambia justo en el nivel que se rompe, a media línea
+            level = None
+            if b > a and not yang and shoulder is not None and b > shoulder:
+                level = max(a, shoulder)
+            elif b < a and yang and waist is not None and b < waist:
+                level = min(a, waist)
+            start = a
+            if level is not None:
+                if level != a:
+                    p.setPen(yang_pen if yang else yin_pen)
+                    p.drawLine(QPF(xi, a), QPF(xi, level))
+                yang = not yang
+                start = level
+            if start != b:
+                p.setPen(yang_pen if yang else yin_pen)
+                p.drawLine(QPF(xi, start), QPF(xi, b))
+            if b > a:
+                shoulder = b
+            elif b < a:
+                waist = b
+        p.end()
+        both = np.concatenate([o, c]) if len(o) else np.array([0.0, 1.0])
+        lo, hi = float(np.nanmin(both)), float(np.nanmax(both))
+        self._rect = QtCore.QRectF(-1, lo, len(x) + 1, max(hi - lo, 1e-12))
+
+    def paint(self, p, *args):
+        p.drawPicture(0, 0, self._pic)
+
+    def boundingRect(self):
+        return self._rect
+
+
+class PointFigureItem(pg.GraphicsObject):
+    """Point & Figure: columnas de X (suben) y O (bajan), una marca por cuadro."""
+
+    def __init__(self, x, o, c, ups, box, tf=None):
+        super().__init__()
+        self._pic = QtGui.QPicture()
+        p = QtGui.QPainter(self._pic)
+        up_pen, down_pen = pg.mkPen(UP, width=1.4), pg.mkPen(DOWN, width=1.4)
+        QPF = QtCore.QPointF
+        lo, hi = np.inf, -np.inf
+        w = 0.36
+        conv = (lambda v: float(tf(np.array([v]))[0])) if tf else float
+        for i in range(len(x)):
+            first, last = round(o[i] / box), round(c[i] / box)
+            xi = float(x[i])
+            p.setPen(up_pen if ups[i] else down_pen)
+            p.setBrush(QtCore.Qt.NoBrush)
+            for k in range(min(first, last), max(first, last) + 1):
+                a, b = conv((k - 0.5) * box), conv((k + 0.5) * box)
+                if not (np.isfinite(a) and np.isfinite(b)):
+                    continue
+                lo, hi = min(lo, a), max(hi, b)
+                if ups[i]:
+                    p.drawLine(QPF(xi - w, a), QPF(xi + w, b))
+                    p.drawLine(QPF(xi - w, b), QPF(xi + w, a))
+                else:
+                    p.drawEllipse(QtCore.QRectF(xi - w, a, 2 * w, b - a))
+        p.end()
+        if not np.isfinite(lo):
+            lo, hi = 0.0, 1.0
+        self._rect = QtCore.QRectF(-1, lo, len(x) + 1, max(hi - lo, 1e-12))
 
     def paint(self, p, *args):
         p.drawPicture(0, 0, self._pic)
@@ -190,8 +343,22 @@ class ValueAxis(pg.AxisItem):
         super().__init__(*a, **k)
         self.log = False
         self.percent = False  # modo comparar: los valores son % de cambio
+        self.view_base = None  # escala %: los valores son precios y se etiquetan contra este precio
+
+    def set_view_base(self, base):
+        if base != self.view_base:
+            self.view_base = base
+            self.picture = None
+            self.update()
 
     def tickValues(self, minVal, maxVal, size):
+        if self.view_base:
+            b = self.view_base
+            lo, hi = (minVal / b - 1) * 100, (maxVal / b - 1) * 100
+            if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+                return []
+            ticks = _nice_linear(lo, hi, max(3, int(size / 38)))
+            return [(1.0, [b * (1 + t / 100) for t in ticks])]
         if not self.log or not (np.isfinite(minVal) and np.isfinite(maxVal)) or maxVal <= minVal:
             return super().tickValues(minVal, maxVal, size)
         lo, hi = 10 ** minVal, 10 ** maxVal
@@ -215,6 +382,10 @@ class ValueAxis(pg.AxisItem):
         return [(1.0, list(np.log10(ticks)))]
 
     def tickStrings(self, values, scale, spacing):
+        if self.view_base:
+            pcts = [(v / self.view_base - 1) * 100 for v in values]
+            gap = min((abs(a - b) for a, b in zip(pcts, pcts[1:])), default=1.0)
+            return [f"{v + 0.0:+.{0 if gap >= 1 else 1 if gap >= 0.1 else 2}f}%" for v in pcts]
         if self.percent:
             return [f"{v:+.{0 if spacing >= 1 else 1}f}%" for v in values]
         if self.log:
@@ -470,6 +641,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._set_pane_range(plot, (lo + hi) / 2 - half, (lo + hi) / 2 + half)
 
     def mousePressEvent(self, ev):
+        shift = bool(ev.modifiers() & QtCore.Qt.ShiftModifier)
+        self.layer.set_shift(shift)
+        if shift:  # pyqtgraph ya eligió quién recibe el arrastre al pasar el mouse: se le hace elegir de nuevo
+            self.scene().lastHoverEvent = None
         zone = self._zone_at(ev.position()) if ev.button() == QtCore.Qt.LeftButton else None
         if zone and zone[0] == "divider":
             self._drag = {"kind": "divider", "row": zone[1], "y": ev.position().y(),
@@ -502,8 +677,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 self.panesResized.emit()
             self._drag = None
             ev.accept()
+            self.layer.set_shift(False)
             return
         super().mouseReleaseEvent(ev)
+        self.layer.set_shift(False)  # después: pyqtgraph entrega el clic al soltar el botón
 
     def mouseDoubleClickEvent(self, ev):
         zone = self._zone_at(ev.position())
@@ -548,7 +725,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     def _show_tags(self, plot, pos, y_value: float, i: int):
         """Etiqueta con el valor del cursor sobre el eje derecho del panel y su fecha sobre el eje de abajo."""
         ax = plot.getAxis("right")
-        if getattr(ax, "percent", False):
+        if getattr(ax, "view_base", None):
+            text = f"{(y_value / ax.view_base - 1) * 100:+.2f}%"
+        elif getattr(ax, "percent", False):
             text = f"{y_value:+.2f}%"
         elif getattr(ax, "log", False):
             text = fmt_price(10 ** y_value)
@@ -706,9 +885,13 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     # --------------------------------------------------------------- render
     def set_data(self, df: pd.DataFrame, computed: list[Computed], chart_type: str = "Velas",
                  intraday: bool = False, keep_view: bool = False, title: str = "", log: bool = False,
-                 comparisons: list | None = None):
+                 comparisons: list | None = None, pct_scale: bool = False, last_price: float | None = None,
+                 opts: dict | None = None):
         """``comparisons``: [(símbolo, cierres alineados a df, color)]. Si hay alguna, la gráfica de
-        precio pasa a % de cambio desde la primera vela del periodo (la escala log se ignora)."""
+        precio pasa a % de cambio desde la primera vela del periodo (la escala log se ignora).
+        ``pct_scale``: etiqueta el eje en % contra la primera vela visible.
+        ``last_price``: precio real, si difiere del último cierre de ``df`` (Renko, Kagi…).
+        ``opts``: datos del tipo de gráfica (cuadro y dirección de las columnas de Point & Figure)."""
         old = None
         if keep_view and self.plots and self.df is not None:
             old = (self.plots[0].getViewBox().viewRange()[0], len(self.df))
@@ -729,6 +912,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self._pane_y.clear()  # otro símbolo o intervalo: la escala elegida ya no aplica
         self._watermark = (None, None)
         self._alert_items = []
+        self._baseline = None
+        self._pct_closes = None
         self.df = df
         self._intraday = intraday
         n = len(df)
@@ -752,14 +937,31 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         main.getAxis("right").log = log
         main.getAxis("right").percent = bool(pct_base)
         o, h, l, c = (df[k].to_numpy(float) for k in ("Open", "High", "Low", "Close"))
-        if chart_type in ("Velas", "Heikin Ashi", "Barras OHLC"):
+        if chart_type in CANDLE_TYPES:
             if chart_type == "Heikin Ashi":
                 o, h, l, c = heikin_ashi(df)
             if tf:
                 o, h, l, c = tf(o), tf(h), tf(l), tf(c)
-            main.addItem(CandleItem(x, o, h, l, c, bars=chart_type == "Barras OHLC"))
+            main.addItem(CandleItem(x, o, h, l, c, bars=chart_type == "Barras OHLC",
+                                    hollow=chart_type == "Velas huecas"))
             self._reg(main, x, l)
             self._reg(main, x, h)
+        elif chart_type == "Kagi":
+            if tf:
+                o, h, l, c = tf(o), tf(h), tf(l), tf(c)
+            main.addItem(KagiItem(x, o, c))
+            self._reg(main, x, l)
+            self._reg(main, x, h)
+        elif chart_type == "Point & Figure":
+            main.addItem(PointFigureItem(x, o, c, (opts or {})["up"], (opts or {})["box"], tf))
+            self._reg(main, x, tf(l) if tf else l)
+            self._reg(main, x, tf(h) if tf else h)
+        elif chart_type == "Línea base":
+            if tf:
+                c = tf(c)
+            self._baseline = BaselineItem(x, c)
+            main.addItem(self._baseline)
+            self._reg(main, x, c)
         else:
             pen = pg.mkPen("#2962ff", width=2)
             if tf:
@@ -772,7 +974,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             main.addItem(item)
             self._reg(main, x, c)
 
-        last = df["Close"].iloc[-1]
+        last = df["Close"].iloc[-1] if last_price is None else last_price
         prev = df["Close"].iloc[-2] if n > 1 else last
         lc = UP if last >= prev else DOWN
         last_line = pg.InfiniteLine(
@@ -782,6 +984,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         main.addItem(last_line, ignoreBounds=True)
         self._last_line = last_line
         self._last_text = last_line.label.format  # texto base; la cuenta regresiva se agrega abajo
+        self._last_value = float(last)
+        if pct_scale and not log and not pct_base:
+            self._pct_closes = closes
         self._candle_end = None
 
         if title:
@@ -969,6 +1174,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if not self.plots:
             return
         x0, x1 = self.plots[0].getViewBox().viewRange()[0]
+        self._update_pct_base(x0)
         for p in self.plots:
             if p in self._fixed or p in self._manual:
                 continue
@@ -986,6 +1192,23 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                     d = abs(hi) * 0.01 or 1.0
                     lo, hi = lo - d, hi + d
                 p.setYRange(lo, hi, padding=0.07)
+                if p is self.plots[0] and self._baseline is not None:
+                    self._baseline.set_base((lo + hi) / 2)
+
+    def _update_pct_base(self, x0: float):
+        """Escala %: el 0 % es el cierre de la primera vela visible, como en TradingView."""
+        closes = self._pct_closes
+        axis = self.plots[0].getAxis("right")
+        if closes is None or not len(closes):
+            axis.set_view_base(None)
+            return
+        i = min(max(int(np.ceil(x0)), 0), len(closes) - 1)
+        base = float(closes[i])
+        base = base if np.isfinite(base) and base > 0 else None
+        axis.set_view_base(base)
+        if base and self._last_line is not None:
+            self._last_text = f"{fmt_price(self._last_value)}  ({(self._last_value / base - 1) * 100:+.2f}%)"
+            self._tick_countdown()
 
     # ------------------------------------------------------------- cursor
     def _on_mouse(self, pos):
