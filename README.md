@@ -1,6 +1,6 @@
 # ChartView
 
-Aplicación de escritorio en Python para graficar acciones de México (BMV), EE.UU. y criptomonedas, con más de 70 indicadores técnicos. Corre localmente; los datos se descargan de Yahoo Finance.
+Aplicación de escritorio en Python para graficar acciones de México (BMV), EE.UU. y criptomonedas, con más de 70 indicadores técnicos. Corre localmente; los datos se descargan de Yahoo Finance y, para cripto, de Binance.
 
 ## Ejecutar
 
@@ -119,3 +119,4 @@ Para agregar uno nuevo, decora una función en `src/indicators.py` con `@indicat
 
 - Yahoo limita la historia intradía: 1 min ≈ 7 días, 2–30 min ≈ 60 días, 1 hora ≈ 2 años. La app ajusta el periodo automáticamente.
 - Los datos de la BMV en Yahoo pueden tener un retraso de unos 15–20 minutos.
+- La cripto se descarga de Binance, sin registro; el encabezado de la gráfica indica la fuente. Los símbolos `-USD` usan el par en USDT, así que el precio y el volumen no coinciden exactamente con los de Yahoo. Se usa Yahoo en el intervalo de 2 minutos, en los periodos anteriores a que Binance listara el par (BTC: 2017), en «Máximo» y en las monedas que Binance no tiene o retiró; también si Binance no responde.

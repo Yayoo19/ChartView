@@ -354,7 +354,7 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.about(
             self, "Acerca de ChartView",
             "<b>ChartView</b><br>Gráficas de mercado de escritorio en Python.<br><br>"
-            "Datos: Yahoo Finance, Reserva Federal (DBnomics) y FRED.<br>"
+            "Datos: Yahoo Finance, Binance, Reserva Federal (DBnomics) y FRED.<br>"
             "<a href='https://github.com/Yayoo19/ChartView' style='color:#2962ff'>github.com/Yayoo19/ChartView</a>")
 
     def _build_center(self):

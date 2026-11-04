@@ -1,4 +1,4 @@
-"""Descarga de datos de mercado con yfinance (Yahoo Finance)."""
+"""Descarga de datos de mercado con yfinance (Yahoo Finance) y Binance para cripto."""
 from __future__ import annotations
 
 import re
@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from . import macro
+from . import binance, macro
 
 MARKETS = ["EE.UU.", "México (BMV)", "Asia", "Cripto", macro.MARKET, "Directo"]
 
@@ -377,6 +377,39 @@ def load(symbol: str, interval_label: str, period: str):
         return df, meta, period
     yi, rule, _, _ = INTERVALS[interval_label]
     period = clamp_period(yi, period)
+    # Una serie nunca mezcla fuentes: si Binance no cubre todo el periodo se usa Yahoo,
+    # y lo que tenga Binance queda como respaldo si Yahoo falla.
+    start = _period_start(period)
+    got = binance.candles(symbol, yi, start) if start is not None else None
+    if got and got[2]:
+        df, meta = got[:2]
+    else:
+        try:
+            df, meta = _yahoo_candles(symbol, yi, period)
+        except Exception:
+            got = got or binance.candles(symbol, yi, None)
+            if not got:
+                raise
+            df, meta = got[:2]
+    if rule and rule.endswith("M"):
+        df = _group_months(df, int(rule[:-1]))
+    elif rule and rule.endswith("W"):
+        df = _group_weeks(df, int(rule[:-1]))
+    elif rule:
+        df = df.resample(rule, origin="start_day").agg(_OHLCV).dropna(subset=["Close"])
+    return df, meta, period
+
+
+def _period_start(period: str) -> pd.Timestamp | None:
+    """Fecha UTC (sin zona) en que empieza el periodo, o None si es toda la historia."""
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+    if period == "ytd":
+        return pd.Timestamp(now.year, 1, 1)
+    days = _PERIOD_DAYS.get(period, 10 ** 7)
+    return now - pd.Timedelta(days=days) if days < 10 ** 6 else None
+
+
+def _yahoo_candles(symbol: str, yi: str, period: str) -> tuple[pd.DataFrame, dict]:
     t = yf.Ticker(symbol)
     df = t.history(period=period, interval=yi, auto_adjust=False, actions=False)
     if df is None or df.empty:
@@ -394,13 +427,7 @@ def load(symbol: str, interval_label: str, period: str):
         meta = {}
     if yi == "1d" and meta.get("instrumentType") == "CRYPTOCURRENCY":
         df = _fill_crypto_days(t, df)
-    if rule and rule.endswith("M"):
-        df = _group_months(df, int(rule[:-1]))
-    elif rule and rule.endswith("W"):
-        df = _group_weeks(df, int(rule[:-1]))
-    elif rule:
-        df = df.resample(rule, origin="start_day").agg(_OHLCV).dropna(subset=["Close"])
-    return df, meta, period
+    return df, meta
 
 
 def _fill_crypto_days(t, df: pd.DataFrame) -> pd.DataFrame:
@@ -602,6 +629,8 @@ def quotes(symbols: list[str]) -> dict[str, tuple[float, float]]:
         except Exception:
             continue
     symbols = [s for s in symbols if not macro.is_macro(s)]
+    out.update(binance.quotes(symbols))
+    symbols = [s for s in symbols if s not in out]
     if not symbols:
         return out
     df = yf.download(symbols, period="5d", interval="1d", group_by="ticker",
