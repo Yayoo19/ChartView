@@ -487,6 +487,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setBackground(BG)
+        self._cursor_i = None  # vela donde está la línea vertical del cursor
         self.ci.layout.setContentsMargins(2, 2, 2, 2)
         self.ci.layout.setSpacing(1)
         self.df: pd.DataFrame | None = None
@@ -785,6 +786,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         p.addItem(h, ignoreBounds=True)
         v.setZValue(100)
         h.setZValue(100)
+        v.hide()  # sin esto, al redibujar quedaría una línea fija en la primera vela hasta mover el mouse
         h.hide()
         self._cross[p] = (v, h)
         lbl = LegendItem(self)
@@ -915,6 +917,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._alert_items = []
         self._baseline = None
         self._pct_closes = None
+        self._cursor_i = None  # las líneas son nuevas y empiezan ocultas
         self.df = df
         self._intraday = intraday
         n = len(df)
@@ -1168,6 +1171,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if not len(self.layer._ts):
             return
         i = int(np.floor(self.layer.t2x(t)))  # la vela que contiene esa fecha, también en la última
+        self._erase_cursor_column()
+        self._cursor_i = i
         for v, h in self._cross.values():
             v.setPos(i)
             v.show()
@@ -1231,6 +1236,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if hovered is None:
             self._hide_tags()
             return
+        self._erase_cursor_column()
+        self._cursor_i = i
         for p, (v, h) in self._cross.items():
             v.setPos(i)
             v.show()
@@ -1244,7 +1251,19 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self.clear_cursor()
         self.cursorTime.emit(float("nan"))
 
+    def _erase_cursor_column(self):
+        """Pide repintar la columna donde estaba la línea. En una gráfica que sigue al cursor de otra,
+        Qt no siempre borra la posición anterior y quedaban líneas fijas en pantalla. Repintar toda la
+        vista en cada movimiento costaría unos 40 ms por gráfica; una columna, casi nada."""
+        if self._cursor_i is None or not self.plots:
+            return
+        vb = self.plots[0].getViewBox()
+        x = self.mapFromScene(vb.mapViewToScene(QtCore.QPointF(self._cursor_i, 0))).x()
+        self.viewport().update(QtCore.QRect(x - 4, 0, 9, self.viewport().height()))
+
     def clear_cursor(self):
+        self._erase_cursor_column()
+        self._cursor_i = None
         self._hide_tags()
         for v, h in self._cross.values():
             v.hide()
@@ -1304,7 +1323,11 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                              f"<a href='hide' style='{icon}'>{'◉' if e.hidden else '👁'}</a>&nbsp; "
                              f"<a href='del' style='{icon}'>✕</a>")
                 lines.append(f"<div>{text}</div>")  # un bloque por renglón: así se sabe qué indicador se tocó
+            # como con la línea del cursor: si el texto se acorta, Qt puede no borrar el final del anterior
+            before = legend.sceneBoundingRect()
             legend.setHtml("".join(lines))
+            area = self.mapFromScene(before.united(legend.sceneBoundingRect())).boundingRect()
+            self.viewport().update(area.adjusted(-2, -2, 2, 2))
 
         r = df.iloc[ic]
         prev = df["Close"].iloc[ic - 1] if ic > 0 else r["Open"]
