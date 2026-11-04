@@ -954,11 +954,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         if not np.isfinite(t):
             self.clear_cursor()
             return
-        ts = self.layer._ts
-        if not len(ts):
+        if not len(self.layer._ts):
             return
-        inside = ts[0] <= t <= ts[-1]
-        i = int(np.searchsorted(ts, t, "right")) - 1 if inside else int(round(self.layer.t2x(t)))
+        i = int(np.floor(self.layer.t2x(t)))  # la vela que contiene esa fecha, también en la última
         for v, h in self._cross.values():
             v.setPos(i)
             v.show()

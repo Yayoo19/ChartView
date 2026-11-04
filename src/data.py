@@ -264,7 +264,8 @@ def _load_expr(expr, interval_label: str, period: str):
     nb = short_name(mb.get("shortName") or mb.get("longName") or b)
     kind = "Ratio" if op == "/" else "Diferencial"
     meta = {"longName": f"{na} {'÷' if op == '/' else '−'} {nb}", "currency": "",
-            "fullExchangeName": kind, "instrumentType": "EXPR"}
+            "fullExchangeName": kind, "instrumentType": "EXPR",
+            "indexTimezone": ma.get("exchangeTimezoneName")}  # las velas siguen el reloj del primer símbolo
     return df, meta, used
 
 

@@ -14,7 +14,7 @@ from .chart import CHART_TYPES, DOWN, UP, fmt_change, fmt_price
 from .dialogs import CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
 from .drawings import TOOL_GROUPS, TOOLS
 from .indicators import REGISTRY, by_category, compute
-from .multichart import LAYOUTS, SYNC_OPTIONS, ChartPane, build_grid, chart_count, layout_icon
+from .multichart import LAYOUTS, SYNC_OPTIONS, ChartPane, build_grid, chart_count, layout_icon, translate_time
 from .searchbox import SymbolSearch
 from .workers import run_task
 
@@ -309,7 +309,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.sync["cursor"]:
             for p in self.panes:
                 if p is not source:
-                    p.chart.show_cursor_at(t)
+                    p.chart.show_cursor_at(translate_time(t, source, p))
 
     def _on_view_changed(self, source: ChartPane):
         if self.sync["time"]:
@@ -320,7 +320,7 @@ class MainWindow(QtWidgets.QMainWindow):
         times = source.chart.visible_times()
         if times:
             for p in targets:
-                p.chart.show_times(*times)
+                p.chart.show_times(*(translate_time(t, source, p) for t in times))
 
     def _fetch(self, sym, interval, period, on_done, on_fail):
         """Descarga velas. Las gráficas que piden lo mismo a la vez comparten una sola descarga."""

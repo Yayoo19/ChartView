@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pandas as pd
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .chart import ChartWidget
@@ -22,6 +23,19 @@ LAYOUTS = {
 }
 MAX_CHARTS = 8
 SYNC_OPTIONS = [("symbol", "Símbolo"), ("interval", "Intervalo"), ("cursor", "Cursor"), ("time", "Rango de tiempo")]
+
+
+def translate_time(t: float, source: "ChartPane", target: "ChartPane") -> float:
+    """Fecha de ``source`` expresada en el reloj de ``target``. Cada gráfica guarda la hora local de su
+    mercado. Solo se convierte entre dos gráficas intradía: una vela diaria representa un día de
+    calendario, y convertirla a otra zona la movería al día anterior."""
+    if not (source.intraday and target.intraday) or not source.tz or not target.tz or source.tz == target.tz:
+        return t
+    try:
+        stamp = pd.Timestamp(t, unit="s").tz_localize(source.tz, ambiguous=False, nonexistent="shift_forward")
+        return stamp.tz_convert(target.tz).tz_localize(None).value / 1e9
+    except Exception:  # noqa: BLE001 - zona desconocida o fecha fuera de rango: mejor sin convertir
+        return t
 
 
 def chart_count(kind: str) -> int:
@@ -112,6 +126,14 @@ class ChartPane(QtWidgets.QFrame):
         lay.addWidget(self.chart, 1)
         self.compact = False
         self.set_appearance(False, True)
+
+    @property
+    def intraday(self) -> bool:
+        return self.chart._intraday  # el de los datos que se ven, no el del intervalo que aún carga
+
+    @property
+    def tz(self) -> str | None:
+        return self.meta.get("exchangeTimezoneName") or self.meta.get("indexTimezone")
 
     @staticmethod
     def _label() -> QtWidgets.QLabel:
