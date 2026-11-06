@@ -32,6 +32,7 @@ _STYLES = {"solid": QtCore.Qt.SolidLine, "dash": QtCore.Qt.DashLine, "dot": QtCo
 DIVIDER_GRAB = 4      # píxeles alrededor del borde entre paneles donde se puede arrastrar
 MIN_PANE_HEIGHT = 50
 PRICE_TAG_STYLE = "background:{color}; color:#ffffff; padding:1px 5px; border-radius:2px; font-size:11px;"
+COLLAPSED_HEIGHT = 22  # panel plegado con doble clic: solo queda la franja con su nombre
 DEFAULT_PANE_FRACTION = 0.12  # panel nuevo cuando las alturas ya se ajustaron a mano
 
 
@@ -484,6 +485,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     cursorTime = QtCore.Signal(float)       # fecha (epoch) bajo el cursor; NaN si salió de la gráfica
     rangeChanged = QtCore.Signal()          # el usuario movió o acercó el eje de tiempo
     pane_heights: dict = {}  # valor de clase: pyqtgraph llama a resizeEvent antes de terminar __init__
+    collapsed: set = set()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -508,6 +510,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         # se reconstruye en cada actualización
         self.pane_heights: dict = {}   # fracción de la altura de cada fila ("main" = precio)
         self._pane_y: dict = {}        # escala vertical elegida a mano por panel
+        self.collapsed: set = set()    # paneles plegados con doble clic (por indicador, p. ej. "rsi#1")
+        self._hidden_by_collapse: dict = {}  # panel -> elementos que se ocultaron al plegarlo
         self._pane_key: dict = {}
         self._pane_default: dict = {}  # escala propia del indicador (RSI 0-100…)
         self._manual: set = set()
@@ -577,14 +581,58 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             return None
         pos = pos.toPoint()
         for row, p in enumerate(self.plots[1:]):
+            if self._is_collapsed(p) or self._is_collapsed(self.plots[row]):
+                continue
             bottom = self.mapFromScene(self.plots[row].getViewBox().sceneBoundingRect().bottomLeft()).y()
             top = self.mapFromScene(p.getViewBox().sceneBoundingRect().topLeft()).y()
             if abs(pos.y() - (top + bottom) / 2) <= DIVIDER_GRAB:
                 return "divider", row
         for p in self.plots[1:]:
-            if self._axis_rect(p.getAxis("right")).contains(pos):
+            if not self._is_collapsed(p) and self._axis_rect(p.getAxis("right")).contains(pos):
                 return "axis", p
         return None
+
+    def _is_collapsed(self, plot) -> bool:
+        return self._pane_key.get(plot) in self.collapsed
+
+    def _pane_at(self, pos):
+        """Panel inferior bajo el punto (coordenadas del widget), o None."""
+        sp = self.mapToScene(pos.toPoint())
+        return next((p for p in self.plots[1:] if p.sceneBoundingRect().contains(sp)), None)
+
+    def toggle_pane(self, plot):
+        """Pliega el panel a una franja con su nombre, o lo vuelve a abrir."""
+        key = self._pane_key.get(plot)
+        if key is None:
+            return
+        self.collapsed ^= {key}
+        self._apply_heights()
+        self.panesResized.emit()
+
+    def _apply_collapsed(self):
+        """Oculta lo dibujado en los paneles plegados (queda la leyenda) y lo devuelve al abrirlos."""
+        for p in self.plots[1:]:
+            vb, ax = p.getViewBox(), p.getAxis("right")
+            if self._is_collapsed(p):
+                cross = self._cross.get(p, ())  # la cruz del cursor se muestra y oculta sola
+                hidden = [it for it in vb.childGroup.childItems() if it.isVisible() and it not in cross]
+                for it in hidden:
+                    it.hide()
+                if p not in self._hidden_by_collapse:
+                    self._tick_len = ax.style["tickLength"]
+                self._hidden_by_collapse.setdefault(p, []).extend(hidden)
+                ax.setStyle(showValues=False, tickLength=0)
+                p.showGrid(x=False, y=False)
+                vb.setMouseEnabled(x=False, y=False)
+            elif not self._is_collapsed(p) and p in self._hidden_by_collapse:
+                for it in self._hidden_by_collapse.pop(p):
+                    try:
+                        it.show()
+                    except RuntimeError:
+                        pass
+                ax.setStyle(showValues=True, tickLength=getattr(self, "_tick_len", -5))
+                self._apply_grid(p)
+                vb.setMouseEnabled(x=True, y=p in self._manual)
 
     def _set_pane_range(self, plot, lo: float, hi: float):
         self._manual.add(plot)
@@ -616,27 +664,38 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         for row in range(lay.rowCount()):
             lay.setRowMinimumHeight(row, 0)
             lay.setRowMaximumHeight(row, 16777215)
-        if not self.pane_heights:
+        folded = [self._is_collapsed(p) for p in self.plots]
+        if not self.pane_heights and not any(folded):
             lay.setRowStretchFactor(0, max(3, len(self.plots)))
             for row in range(1, len(self.plots)):
                 lay.setRowStretchFactor(row, 1)
         else:
-            fractions = [self.pane_heights.get(k, DEFAULT_PANE_FRACTION) for k in self._row_keys()]
+            if self.pane_heights:
+                fractions = [self.pane_heights.get(k, DEFAULT_PANE_FRACTION) for k in self._row_keys()]
+            else:  # mismo reparto que el automático
+                fractions = [max(3, len(self.plots)) if row == 0 else 1 for row in range(len(self.plots))]
+            # el último panel lleva además el eje de fechas
+            strip = [COLLAPSED_HEIGHT + (p.getAxis("bottom").height() if row == len(self.plots) - 1 else 0)
+                     for row, p in enumerate(self.plots)]
             margins = lay.getContentsMargins()
             free = self.viewport().height() - margins[1] - margins[3] - lay.verticalSpacing() * (len(fractions) - 1)
+            free -= sum(h for h, c in zip(strip, folded) if c)
+            total = sum(f for f, c in zip(fractions, folded) if not c) or 1
             for row, f in enumerate(fractions):
-                lay.setRowFixedHeight(row, max(MIN_PANE_HEIGHT, free * f / sum(fractions)))
+                lay.setRowFixedHeight(row, strip[row] if folded[row] else max(MIN_PANE_HEIGHT, free * f / total))
         lay.invalidate()
+        self._apply_collapsed()
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
-        if self.pane_heights and self.plots:
+        if (self.pane_heights or self.collapsed) and self.plots:
             self._apply_heights()
         QtCore.QTimer.singleShot(0, self._place_price_tag)  # después de que el layout acomode los ejes
 
     def reset_panes(self):
         """Altura y escala originales en todos los paneles inferiores."""
         self.pane_heights = {}
+        self.collapsed = set()
         for p in list(self.plots[1:]):
             self._reset_pane(p)
         self._pane_y.clear()
@@ -651,7 +710,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         pair = heights[row] + heights[row + 1]
         heights[row] = min(max(heights[row] + dy, MIN_PANE_HEIGHT), pair - MIN_PANE_HEIGHT)
         heights[row + 1] = pair - heights[row]
+        old = dict(self.pane_heights)
         self.pane_heights = {k: h / sum(heights) for k, h in zip(self._row_keys(), heights)}
+        for k in self.collapsed & set(self.pane_heights):  # el plegado conserva la altura que tenía abierto
+            self.pane_heights[k] = old.get(k, DEFAULT_PANE_FRACTION)
         self._apply_heights()
 
     def _drag_axis(self, drag, dy: float):
@@ -712,6 +774,8 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self.pane_heights = {}
             self._apply_heights()
             self.panesResized.emit()
+        elif ev.button() == QtCore.Qt.LeftButton and self.layer.tool == "cursor" and self._pane_at(ev.position()):
+            self.toggle_pane(self._pane_at(ev.position()))
         else:
             super().mouseDoubleClickEvent(ev)
             return
@@ -932,6 +996,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self.plots, self._series, self._entries, self._labels, self._cross = [], {}, {}, {}, {}
         self._fixed = set()
         self._pane_key, self._pane_default, self._manual = {}, {}, set()
+        self._hidden_by_collapse = {}
         if not keep_view:
             self._pane_y.clear()  # otro símbolo o intervalo: la escala elegida ya no aplica
         self._watermark = (None, None)
@@ -1095,6 +1160,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
             self.show_last(self.default_bars)
         self._on_xrange()
         self.layer.set_context(main, self.plots[1:], df, log, pct_base)
+        self._apply_collapsed()  # los dibujos de los paneles ya están puestos: también se ocultan
         self._update_labels(n - 1)
         self._synced_range = None
         # se conecta al final: armar la gráfica no cuenta como un movimiento del usuario

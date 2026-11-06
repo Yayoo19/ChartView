@@ -119,6 +119,7 @@ class ChartPane(QtWidgets.QFrame):
         self.info = self._label()
         self.chart.grid_alpha = grid_alpha
         self.chart.pane_heights = dict(state.get("pane_heights") or {})
+        self.chart.collapsed = set(state.get("collapsed_panes") or [])
         self.chart.hovered.connect(self.info.setText)
         self.chart.viewport().installEventFilter(self)
         self.chart.installEventFilter(self)  # para reacomodar el encabezado al cambiar de tamaño
@@ -168,7 +169,8 @@ class ChartPane(QtWidgets.QFrame):
         return {"symbol": self.symbol or self.want, "interval": self.interval, "period": self.period_key,
                 "chart_type": self.chart_type, "log": self.log, "pct": self.pct, "invert": self.invert,
                 "chart_params": self.chart_params, "indicators": self.indicators,
-                "comparisons": self.comparisons, "pane_heights": dict(self.chart.pane_heights)}
+                "comparisons": self.comparisons, "pane_heights": dict(self.chart.pane_heights),
+                "collapsed_panes": sorted(self.chart.collapsed)}
 
     def retire(self):
         """Saca la gráfica de la ventana; lo que aún se esté descargando para ella se descarta."""
