@@ -889,7 +889,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
     def set_data(self, df: pd.DataFrame, computed: list[Computed], chart_type: str = "Velas",
                  intraday: bool = False, keep_view: bool = False, title: str = "", log: bool = False,
                  comparisons: list | None = None, pct_scale: bool = False, last_price: float | None = None,
-                 opts: dict | None = None):
+                 opts: dict | None = None, inverted: bool = False):
         """``comparisons``: [(símbolo, cierres alineados a df, color)]. Si hay alguna, la gráfica de
         precio pasa a % de cambio desde la primera vela del periodo (la escala log se ignora).
         ``pct_scale``: etiqueta el eje en % contra la primera vela visible.
@@ -927,6 +927,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         idx = df.index
 
         main = self._new_plot(0, idx)
+        main.getViewBox().invertY(inverted)  # escala invertida: los máximos quedan abajo
         # Modo comparar: todo lo que va sobre el precio se expresa en % desde la primera vela.
         # Escala log: el precio principal se dibuja como log10(precio) y el eje
         # muestra los precios reales. Los paneles inferiores siguen lineales.

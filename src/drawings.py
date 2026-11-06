@@ -152,7 +152,10 @@ class ShapeROI(pg.ROI):
         r = QtCore.QRectF(0, 0, w, h).normalized()
         p.setRenderHint(QtGui.QPainter.Antialiasing)
         if self.kind == "image" and self.image is not None:
-            p.drawImage(r, self.image)
+            vb = self.getViewBox()
+            inverted = vb is not None and vb.yInverted()
+            # la imagen ya viene volteada para un eje que crece hacia arriba; con la escala invertida no
+            p.drawImage(r, self.image.mirrored(False, True) if inverted else self.image)
             if self.mouseHovering:
                 p.setPen(self.currentPen)
                 p.setBrush(QtCore.Qt.NoBrush)

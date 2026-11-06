@@ -43,7 +43,7 @@ SHORTCUTS = [
     ("Inicio", "Ver las últimas velas"), ("Alt+L", "Escala logarítmica"), ("Ctrl+B", "Mostrar u ocultar listas"), ("Ctrl+D", "Mostrar u ocultar herramientas de dibujo"),
     ("Ctrl+E", "Mostrar u ocultar el panel de análisis"), ("Ctrl+J", "Abrir o plegar el panel inferior"),
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
-    ("Alt+P", "Escala porcentual"), ("Ctrl+Z", "Deshacer en los dibujos"), ("Ctrl+Y", "Rehacer en los dibujos"),
+    ("Alt+P", "Escala porcentual"), ("Alt+I", "Invertir la escala (gráfica de cabeza)"), ("Ctrl+Z", "Deshacer en los dibujos"), ("Ctrl+Y", "Rehacer en los dibujos"),
     ("Shift+clic", "Medir precio, % y velas"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
     ("Ctrl+G", "Encender o apagar la cuadrícula"), ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
 ]
@@ -217,6 +217,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ctype.setCurrentText(a.chart_type)
             self.log_scale.setChecked(a.log)
             self.pct_scale.setChecked(a.pct)
+            self.invert_act.setChecked(a.invert)
         finally:
             self._syncing_ui = False
         self._update_chart_params_button()
@@ -375,6 +376,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "Alt+P", True, short="%")
         self.pct_scale.setChecked(self.active.pct)
         self.pct_scale.toggled.connect(self._on_pct)
+        self.invert_act = action("Invertir escala", "Voltear la gráfica de precio de cabeza: lo que sube se ve "
+                                 "bajando (Alt+I)", "Alt+I", True, short="Invertir")
+        self.invert_act.setChecked(self.active.invert)
+        self.invert_act.toggled.connect(self._on_invert)
         self.auto = action("Actualización automática", "Actualizar la gráfica automáticamente",
                            checkable=True, short="Auto")
         self.auto.setChecked(bool(self.cfg.get("auto_refresh")))
@@ -512,7 +517,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._range_btns[key] = b
             h.addWidget(b)
         h.addStretch(1)
-        for act in (self.log_scale, self.pct_scale, self.auto):
+        for act in (self.log_scale, self.pct_scale, self.invert_act, self.auto):
             b = QtWidgets.QToolButton()
             b.setDefaultAction(act)
             h.addWidget(b)
@@ -548,6 +553,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addSeparator()
         v.addAction(self.log_scale)
         v.addAction(self.pct_scale)
+        v.addAction(self.invert_act)
         v.addAction(self.fit_act)
         v.addAction(self.recent_act)
         v.addSeparator()
@@ -1295,6 +1301,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._syncing_ui:
             self._set_scale(False if on else self.active.log, on)
 
+    def _on_invert(self, on):
+        if not self._syncing_ui:
+            self.active.invert = on
+            self.redraw(keep_view=True)
+            self._save()
+
     def load(self, text, raw=False, keep_view=False, silent=False, by_name=False, pane=None):
         """Carga un símbolo en una gráfica (por omisión, la activa).
         ``by_name``: si no existe tal cual, se busca por nombre y se abre el primero."""
@@ -1485,7 +1497,7 @@ class MainWindow(QtWidgets.QMainWindow):
         chart.set_data(df, computed, chart_type, intraday=intraday,
                        keep_view=keep_view, title=pane.symbol, log=pane.log, comparisons=comps,
                        pct_scale=pane.pct, last_price=float(source["Close"].iloc[-1]) if transformed else None,
-                       opts=opts)
+                       opts=opts, inverted=pane.invert)
         self._update_alert_lines(pane)
         try:  # una barra de Renko o Kagi no cierra a una hora: se cierra cuando el precio la completa
             chart.set_countdown(None if transformed else data.candle_end(df, pane.meta, interval))
