@@ -31,6 +31,7 @@ _STYLES = {"solid": QtCore.Qt.SolidLine, "dash": QtCore.Qt.DashLine, "dot": QtCo
 # --------------------------------------------------------------------------- #
 DIVIDER_GRAB = 4      # píxeles alrededor del borde entre paneles donde se puede arrastrar
 MIN_PANE_HEIGHT = 50
+PRICE_TAG_STYLE = "background:{color}; color:#ffffff; padding:1px 5px; border-radius:2px; font-size:11px;"
 DEFAULT_PANE_FRACTION = 0.12  # panel nuevo cuando las alturas ya se ajustaron a mano
 
 
@@ -513,6 +514,9 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._drag = None
         self.scene().sigMouseMoved.connect(self._on_mouse)
         self.layer = DrawingLayer(self)
+        # último precio y cuenta regresiva, sobre el eje de precios para no tapar las velas;
+        # se crea antes que las del cursor para que esas queden encima
+        self._pricetag = self._make_tag()
         # etiquetas del cursor sobre los ejes: precio a la derecha y fecha abajo (como TradingView)
         self._ytag = self._make_tag()
         self._xtag = self._make_tag()
@@ -530,8 +534,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._tick_countdown()
 
     def _tick_countdown(self):
-        line = self._last_line
-        if line is None:
+        if self._last_line is None:
             return
         text = self._last_text
         if self._candle_end is not None:
@@ -544,12 +547,28 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 text = f"{text}\n{left}"
             else:
                 self._candle_end = None  # la vela ya cerró: se quita hasta la próxima actualización
+        if self._pricetag.text() != text:
+            self._pricetag.setText(text)
+            self._pricetag.adjustSize()
+        self._place_price_tag()
+
+    def _place_price_tag(self, *_a):
+        """Pone la etiqueta del último precio sobre el eje derecho, a la altura de la línea punteada.
+        Si el precio queda fuera de la vista, se pega al borde del eje."""
+        tag, line = self._pricetag, self._last_line
+        if line is None or not self.plots:
+            tag.hide()
+            return
         try:
-            if line.label.format != text:
-                line.label.setFormat(text)
-                line.label.valueChanged()
-        except RuntimeError:  # la línea ya no existe (se redibujó la gráfica)
-            self._last_line = None
+            vb = self.plots[0].getViewBox()
+            y = self.mapFromScene(vb.mapViewToScene(QtCore.QPointF(0, line.value()))).y()
+        except RuntimeError:  # la gráfica se está redibujando
+            tag.hide()
+            return
+        r = self._axis_rect(self.plots[0].getAxis("right"))
+        top = int(min(max(y - tag.height() / 2, r.top()), r.bottom() - tag.height()))
+        tag.move(min(r.left() + 1, r.right() - tag.width()), top)
+        tag.show()
 
     # ------------------------------------------------------- paneles a mano
     def _zone_at(self, pos):
@@ -613,6 +632,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         super().resizeEvent(ev)
         if self.pane_heights and self.plots:
             self._apply_heights()
+        QtCore.QTimer.singleShot(0, self._place_price_tag)  # después de que el layout acomode los ejes
 
     def reset_panes(self):
         """Altura y escala originales en todos los paneles inferiores."""
@@ -908,6 +928,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self.clear()
         self._hide_tags()
         self._last_line = None
+        self._pricetag.hide()
         self.plots, self._series, self._entries, self._labels, self._cross = [], {}, {}, {}, {}
         self._fixed = set()
         self._pane_key, self._pane_default, self._manual = {}, {}, set()
@@ -983,12 +1004,14 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         prev = df["Close"].iloc[-2] if n > 1 else last
         lc = UP if last >= prev else DOWN
         last_line = pg.InfiniteLine(
-            pos=float(tf(last)) if tf else last, angle=0, movable=False, pen=pg.mkPen(lc, width=1, style=QtCore.Qt.DotLine),
-            label=f"{fmt_price(last)}  ({(last / pct_base - 1) * 100:+.2f}%)" if pct_base else fmt_price(last),
-            labelOpts={"position": 0.985, "color": "#ffffff", "fill": lc, "anchors": [(1, 1), (1, 1)]})
+            pos=float(tf(last)) if tf else last, angle=0, movable=False, pen=pg.mkPen(lc, width=1, style=QtCore.Qt.DotLine))
         main.addItem(last_line, ignoreBounds=True)
         self._last_line = last_line
-        self._last_text = last_line.label.format  # texto base; la cuenta regresiva se agrega abajo
+        # texto base de la etiqueta del eje; la cuenta regresiva se agrega abajo
+        self._last_text = f"{fmt_price(last)}\n{(last / pct_base - 1) * 100:+.2f}%" if pct_base else fmt_price(last)
+        self._pricetag.setStyleSheet(PRICE_TAG_STYLE.format(color=lc))
+        self._pricetag.setText("")
+        main.getViewBox().sigRangeChanged.connect(self._place_price_tag)
         self._last_value = float(last)
         if pct_scale and not log and not pct_base:
             self._pct_closes = closes
@@ -1219,7 +1242,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         base = base if np.isfinite(base) and base > 0 else None
         axis.set_view_base(base)
         if base and self._last_line is not None:
-            self._last_text = f"{fmt_price(self._last_value)}  ({(self._last_value / base - 1) * 100:+.2f}%)"
+            self._last_text = f"{fmt_price(self._last_value)}\n{(self._last_value / base - 1) * 100:+.2f}%"
             self._tick_countdown()
 
     # ------------------------------------------------------------- cursor
