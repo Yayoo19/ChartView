@@ -101,6 +101,11 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - Intervalos de 1 minuto a 12 meses. Las velas de 4 horas se arman con datos de 1 hora, las de 2 y 3 días con velas diarias, y las de 2 semanas con velas semanales (siempre empiezan en lunes). Las de 2 y 3 días cuentan días hábiles, salvo en cripto, que cuenta días de calendario; un festivo acorta la vela que le toca. Las de 3 días de BTC y ETH coinciden con las de Binance; en otros pares los bloques pueden empezar en otro día, porque Binance los cuenta desde que listó cada par. Las de 2, 3, 6 y 12 meses se arman con velas mensuales, alineadas a bimestres, trimestres, semestres y años del calendario.
 - El panel de listas se abre y se cierra con 📋 a la derecha, con la ✕ o con Ctrl+B.
 - Varias listas de seguimiento: el menú ⋯ crea, duplica, renombra y elimina listas. Cada símbolo muestra debajo el nombre de la empresa o serie. Con clic derecho copias un símbolo a otra lista o creas una alerta.
+- Orden y secciones a tu gusto:
+  - **Ordenar:** arrastra un símbolo para cambiarlo de lugar o pasarlo a otra sección. También puedes arrastrar una sección completa.
+  - **Secciones:** crea secciones con el nombre que quieras desde el menú ⋯ o con clic derecho. Con clic derecho sobre una sección la renombras, la ordenas de la A a la Z o la eliminas.
+  - **Mover sin arrastrar:** clic derecho sobre el símbolo → «Mover a sección».
+  - **Agregar actual:** pone el símbolo en la sección seleccionada. Si no hay ninguna seleccionada, va a la de su mercado. El orden nunca cambia solo.
 - **Dibujo** (barra vertical a la izquierda de la gráfica; se oculta y se muestra con **✎** en la barra superior, Ver → Herramientas de dibujo o Ctrl+D):
   - Herramientas agrupadas: cursor; líneas (horizontal, rayo horizontal, vertical, tendencia, rayo, flecha); canales (canal paralelo, tridente de Andrews); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci (retroceso y extensión por tendencia); trading (medir, posición larga, posición corta, VWAP anclado); borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
   - **Medir:** Shift+clic (o Shift+arrastrar) en cualquier momento, o la herramienta 📏. Muestra el cambio de precio, el %, las velas y el tiempo. Otro clic o Esc la quita; no se guarda.

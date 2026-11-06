@@ -88,6 +88,64 @@ class WatchDelegate(QtWidgets.QStyledItemDelegate):
         painter.restore()
 
 
+class WatchTree(QtWidgets.QTreeWidget):
+    """Lista de seguimiento con orden manual: se arrastran símbolos (dentro de su sección o a otra)
+    y secciones completas. El árbol no se mueve solo: avisa el cambio y la ventana lo rehace desde la config."""
+    symbolMoved = QtCore.Signal(int, int, int, int)  # sección y fila de origen, sección y fila de destino
+    sectionMoved = QtCore.Signal(int, int)  # índice de origen, posición de destino (antes de quitarla)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(QtCore.Qt.MoveAction)
+        self.setDropIndicatorShown(True)
+
+    def dropEvent(self, ev):
+        src = self.currentItem()
+        target = self.itemAt(ev.position().toPoint())
+        pos = self.dropIndicatorPosition()
+        # el movimiento lo hace la ventana sobre la config; Qt no debe mover ni borrar nada por su cuenta
+        ev.setDropAction(QtCore.Qt.IgnoreAction)
+        ev.accept()
+        n = self.topLevelItemCount()
+        if src is None or n == 0:
+            return
+        V = QtWidgets.QAbstractItemView
+        if src.parent() is None:  # sección completa
+            si = self.indexOfTopLevelItem(src)
+            if target is None:
+                new = n
+            else:
+                ts = target if target.parent() is None else target.parent()
+                ti = self.indexOfTopLevelItem(ts)
+                if target is ts and pos == V.AboveItem:
+                    new = ti
+                elif target is ts and pos == V.BelowItem:
+                    new = ti + 1
+                else:  # sobre la sección o sobre uno de sus símbolos: toma su lugar
+                    new = ti if si > ti else ti + 1
+            if new not in (si, si + 1):
+                QtCore.QTimer.singleShot(0, lambda: self.sectionMoved.emit(si, new))
+            return
+        ss, sr = self.indexOfTopLevelItem(src.parent()), src.parent().indexOfChild(src)
+        if target is None:  # espacio vacío de abajo: al final de la última sección
+            ds = n - 1
+            dr = self.topLevelItem(ds).childCount()
+        elif target.parent() is None:  # sobre el título de una sección
+            ti = self.indexOfTopLevelItem(target)
+            if pos == V.AboveItem and ti > 0:  # justo arriba del título = final de la sección anterior
+                ds, dr = ti - 1, self.topLevelItem(ti - 1).childCount()
+            elif pos == V.BelowItem and target.isExpanded():
+                ds, dr = ti, 0
+            else:
+                ds, dr = ti, (0 if pos == V.AboveItem else target.childCount())
+        else:
+            ds = self.indexOfTopLevelItem(target.parent())
+            dr = target.parent().indexOfChild(target) + (0 if pos == V.AboveItem else 1)
+        if (ds, dr) not in ((ss, sr), (ss, sr + 1)):
+            QtCore.QTimer.singleShot(0, lambda: self.symbolMoved.emit(ss, sr, ds, dr))
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -825,12 +883,21 @@ class MainWindow(QtWidgets.QMainWindow):
         wl_menu.addAction("Duplicar lista…", lambda: self.new_watchlist(copy=True))
         wl_menu.addAction("Renombrar…", self.rename_watchlist)
         wl_menu.addSeparator()
+        wl_menu.addAction("Nueva sección…", self.new_section)
+        wl_menu.addSeparator()
         wl_menu.addAction("Eliminar lista", self.delete_watchlist)
         wl_btn.setMenu(wl_menu)
         top.addWidget(self.wl_combo, 1)
         top.addWidget(wl_btn)
         lay.addLayout(top)
-        self.watch = QtWidgets.QTreeWidget()
+        self.watch = WatchTree()
+        self.watch.setToolTip("Arrastra los símbolos para ordenarlos o pasarlos a otra sección.\n"
+                              "Clic derecho para crear, renombrar o eliminar secciones.")
+        self.watch.symbolMoved.connect(self._move_symbol)
+        self.watch.sectionMoved.connect(self._move_section)
+        self.watch.itemCollapsed.connect(lambda it: self._wl_collapsed.add((self.wl_combo.currentText(), it.text(0))))
+        self.watch.itemExpanded.connect(lambda it: self._wl_collapsed.discard((self.wl_combo.currentText(), it.text(0))))
+        self._wl_collapsed = set()  # secciones plegadas (se respetan al rehacer el árbol)
         self.watch.setHeaderLabels(["Símbolo", "Último", "Cambio"])
         self.watch.setRootIsDecorated(True)
         self.watch.setIndentation(12)
@@ -1016,13 +1083,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.refresh_quotes()
             self._save()
 
-    def _ask_name(self, title, text=""):
-        name, ok = QtWidgets.QInputDialog.getText(self, title, "Nombre de la lista:", text=text)
+    def _ask_name(self, title, text="", taken=None, what="lista"):
+        name, ok = QtWidgets.QInputDialog.getText(self, title, f"Nombre de la {what}:", text=text)
         name = name.strip()
-        if not ok or not name:
+        if not ok or not name or name == text:
             return None
-        if name in self.cfg["watchlists"]:
-            QtWidgets.QMessageBox.warning(self, title, f"Ya existe una lista llamada «{name}».")
+        if name in (self.cfg["watchlists"] if taken is None else taken):
+            QtWidgets.QMessageBox.warning(self, title, f"Ya existe una {what} llamada «{name}».")
             return None
         return name
 
@@ -1049,16 +1116,101 @@ class MainWindow(QtWidgets.QMainWindow):
             del self.cfg["watchlists"][name]
             self._fill_watchlist_combo()
 
+    # ---------------------------------------------------- secciones y orden manual
+    def _set_wl(self, groups: dict):
+        self.cfg["watchlists"][self.wl_combo.currentText()] = groups
+        self._fill_watchlist()
+        self._show_quotes({})
+        self._save()
+
+    def _selected_section(self):
+        it = self.watch.currentItem()
+        if it is None:
+            return None
+        return (it.parent() or it).text(0)
+
+    def new_section(self, move_symbol=None):
+        """Crea una sección con el nombre que quieras; si viene de «Mover a sección», pasa el símbolo ahí."""
+        groups = self._wl()
+        name = self._ask_name("Nueva sección", taken=groups, what="sección")
+        if not name:
+            return
+        groups = dict(groups)
+        groups[name] = []
+        if move_symbol:
+            sym, old = move_symbol
+            if sym in groups.get(old, []):
+                groups[old] = [s for s in groups[old] if s != sym]
+                groups[name].append(sym)
+        self._set_wl(groups)
+
+    def rename_section(self, old):
+        groups = self._wl()
+        name = self._ask_name("Renombrar sección", old, taken=groups, what="sección")
+        if name:
+            self._set_wl({(name if k == old else k): v for k, v in groups.items()})
+
+    def delete_section(self, name):
+        syms = self._wl().get(name, [])
+        if syms and QtWidgets.QMessageBox.question(
+                self, "Eliminar sección",
+                f"¿Eliminar la sección «{name}» y sus {len(syms)} símbolo(s) de esta lista?") != QtWidgets.QMessageBox.Yes:
+            return
+        self._set_wl({k: v for k, v in self._wl().items() if k != name})
+
+    def _move_to_section(self, sym, old, new):
+        groups = {k: list(v) for k, v in self._wl().items()}
+        if sym in groups.get(old, []) and new in groups:
+            groups[old].remove(sym)
+            groups[new].append(sym)
+            self._set_wl(groups)
+
+    def _sort_section(self, name):
+        groups = {k: list(v) for k, v in self._wl().items()}
+        groups[name].sort(key=lambda s: s.lstrip("^").upper())
+        self._set_wl(groups)
+
+    def _move_symbol(self, ss, sr, ds, dr):
+        """Arrastre de un símbolo: de (sección ss, fila sr) a (sección ds, antes de la fila dr)."""
+        groups = {k: list(v) for k, v in self._wl().items()}
+        names = list(groups)
+        try:
+            src, dst = groups[names[ss]], groups[names[ds]]
+            sym = src.pop(sr)
+        except IndexError:
+            return
+        if src is dst and dr > sr:
+            dr -= 1
+        if sym in dst:  # ya estaba en la sección destino: no se duplica
+            src.insert(sr, sym)
+            return
+        dst.insert(dr, sym)
+        self._set_wl(groups)
+        self._select_symbol(sym, names[ds])
+
+    def _move_section(self, si, new):
+        items = list(self._wl().items())
+        if not 0 <= si < len(items):
+            return
+        moved = items.pop(si)
+        items.insert(new - 1 if new > si else new, moved)
+        self._set_wl(dict(items))
+
+    def _select_symbol(self, sym, section):
+        for it in self._watch_items.get(sym, []):
+            if it.parent() and it.parent().text(0) == section:
+                self.watch.setCurrentItem(it)
+
     def _fill_watchlist(self):
         self.watch.clear()
         self._watch_items = {}
+        lname = self.wl_combo.currentText()
         for group, syms in self._wl().items():
-            if not syms:
-                continue
             top = QtWidgets.QTreeWidgetItem([group])
             f = top.font(0)
             f.setBold(True)
             top.setFont(0, f)
+            top.setToolTip(0, "Arrastra la sección para cambiarla de lugar; clic derecho para renombrarla")
             for s in syms:
                 it = QtWidgets.QTreeWidgetItem([s, "", ""])
                 it.setData(0, QtCore.Qt.UserRole, s)
@@ -1067,7 +1219,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 top.addChild(it)
                 self._watch_items.setdefault(s, []).append(it)
             self.watch.addTopLevelItem(top)
-        self.watch.expandAll()
+            top.setExpanded((lname, group) not in self._wl_collapsed)
         self._apply_names()
         self._fetch_names()
 
@@ -1114,11 +1266,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _watch_menu(self, pos):
         it = self.watch.itemAt(pos)
-        if not it or not it.data(0, QtCore.Qt.UserRole):
+        m = QtWidgets.QMenu(self)
+        if it is None or it.parent() is None:  # espacio vacío o título de sección
+            if it is not None:
+                sec = it.text(0)
+                m.addAction("Renombrar sección…", lambda: self.rename_section(sec))
+                m.addAction("Ordenar A→Z", lambda: self._sort_section(sec))
+                m.addAction("Eliminar sección", lambda: self.delete_section(sec))
+                m.addSeparator()
+            m.addAction("Nueva sección…", self.new_section)
+            m.exec(self.watch.viewport().mapToGlobal(pos))
             return
         s = it.data(0, QtCore.Qt.UserRole)
-        m = QtWidgets.QMenu(self)
+        sec = it.parent().text(0)
         m.addAction("Abrir", lambda: self._on_watch(it))
+        mv = m.addMenu("Mover a sección")
+        for n in self._wl():
+            if n != sec:
+                mv.addAction(n, lambda n=n: self._move_to_section(s, sec, n))
+        if not mv.isEmpty():
+            mv.addSeparator()
+        mv.addAction("Nueva sección…", lambda: self.new_section(move_symbol=(s, sec)))
         last = getattr(self, "_quotes", {}).get(s, (0.0,))[0] or 0.0
         m.addAction("🔔 Crear alerta…", lambda: self.open_alerts(alerts.new_alert(s, "price_cross_up", last)))
         others = [n for n in self.cfg["watchlists"] if n != self.wl_combo.currentText()]
@@ -1134,11 +1302,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if not symbol:
             return
         meta = self.meta if symbol == self.symbol else None
-        groups = self.cfg["watchlists"].setdefault(list_name or self.wl_combo.currentText(), {})
-        lst = groups.setdefault(data.guess_market(symbol, meta), [])
-        if symbol in lst:
+        target = list_name or self.wl_combo.currentText()
+        groups = self.cfg["watchlists"].setdefault(target, {})
+        where = next((g for g, syms in groups.items() if symbol in syms), None)
+        if where:
+            self.statusBar().showMessage(f"{symbol} ya está en «{target}», sección «{where}»", 5000)
             return
-        lst.append(symbol)
+        # en la lista activa va a la sección seleccionada; si no hay ninguna, a la de su mercado
+        section = self._selected_section() if list_name in (None, self.wl_combo.currentText()) else None
+        groups.setdefault(section or data.guess_market(symbol, meta), []).append(symbol)
         self._save()
         if list_name is None or list_name == self.wl_combo.currentText():
             self._fill_watchlist()
