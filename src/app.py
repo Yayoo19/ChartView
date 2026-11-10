@@ -152,6 +152,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("ChartView")
         self.resize(1500, 920)
         self.cfg = config.load()
+        # los cambios seguidos (cargar varias gráficas, arrastrar un borde…) se guardan una sola vez
+        self._save_timer = QtCore.QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(500)
+        self._save_timer.timeout.connect(self._flush_save)
+        self._save_failed = False
+        if config.load_warning:
+            QtCore.QTimer.singleShot(0, lambda: QtWidgets.QMessageBox.warning(
+                self, "Configuración dañada", config.load_warning))
         macro.FRED_API_KEY = self.cfg.get("fred_api_key", "")
         self._syncing_ui = False  # la barra se está poniendo al día con la gráfica activa: no es una orden
         self._inflight: dict = {}  # descargas en curso: (símbolo, intervalo, periodo) -> quienes la esperan
@@ -1816,6 +1825,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cfg.setdefault("layout_sizes", {})[self.layout_kind] = sizes
 
     def _save(self):
+        """Pide guardar la configuración; se escribe poco después, junto con los cambios que sigan."""
+        self._save_timer.start()
+
+    def _flush_save(self):
+        """Escribe la configuración ahora mismo (al cerrar no se espera al temporizador)."""
+        self._save_timer.stop()
         self._remember_sizes()
         a = self.active
         self.cfg.update({
@@ -1838,7 +1853,14 @@ class MainWindow(QtWidgets.QMainWindow):
         panel.update(open=self.bottom.expanded, tab=self.bottom.stack.currentIndex())
         if self.bottom.expanded and self.isVisible():
             panel["height"] = self.bottom_dock.height()
-        config.save(self.cfg)
+        ok = config.save(self.cfg)
+        if not ok and not self._save_failed:  # se avisa una vez, no en cada intento
+            QtWidgets.QMessageBox.warning(
+                self, "No se pudo guardar",
+                f"No se pudo guardar la configuración en\n{config.PATH}\n\n{config.last_error}\n\n"
+                "Tus cambios siguen en la app y se intentará guardar de nuevo; "
+                "el último guardado correcto sigue intacto.")
+        self._save_failed = not ok
 
     # ======================================================== alertas
     def _setup_alerts(self):
@@ -1976,6 +1998,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def quit_app(self):
         self._quitting = True
+        self._flush_save()  # desde la bandeja la ventana puede estar oculta y no recibir closeEvent
         self.close()
         QtWidgets.QApplication.quit()
 
@@ -1983,7 +2006,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # posición, tamaño y si el panel de listas quedó abierto, cerrado o flotando
         self.cfg["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         self.cfg["window_state"] = bytes(self.saveState(WINDOW_STATE_VERSION).toBase64()).decode()
-        self._save()
+        self._flush_save()
         has_alerts = any(a.get("enabled") for a in self.cfg.get("alerts", []))
         if (not self._quitting and self.tray is not None and has_alerts
                 and self.cfg.get("alerts_tray_on_close")):
