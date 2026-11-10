@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import data
+from . import data, theme
 from .alerts import CHECK_EVERY, REPEAT, TYPES, describe, new_alert
 
 
@@ -47,7 +47,7 @@ class AlertEditDialog(QtWidgets.QDialog):
         self.note = QtWidgets.QLineEdit(self.alert.get("note", ""))
         self.note.setPlaceholderText("Opcional: aparece en la notificación")
         self.preview = QtWidgets.QLabel()
-        self.preview.setStyleSheet("color:#9598a1;")
+        theme.style(self.preview, "color:#9598a1;")
 
         form.addRow("Símbolo:", self.symbol)
         form.addRow("Condición:", self.type)

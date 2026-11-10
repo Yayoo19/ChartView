@@ -1,11 +1,14 @@
-"""Panel inferior plegable: movimientos de la lista, alertas recientes y notas por símbolo."""
+"""Panel inferior plegable: movimientos de la lista, alertas recientes, notas por símbolo y mapa de calor."""
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import theme
 from .chart import DOWN, UP, fmt_price
+from .heatmap import HeatmapPanel
 
-TABS = ["Movimientos", "Alertas", "Notas"]
+TABS = ["Movimientos", "Alertas", "Notas", "Mapa de calor"]
+HEATMAP_TAB = 3
 
 
 class BottomPanel(QtWidgets.QWidget):
@@ -23,7 +26,7 @@ class BottomPanel(QtWidgets.QWidget):
         self.bar = QtWidgets.QTabBar()
         self.bar.setExpanding(False)
         self.bar.setDrawBase(False)
-        self.bar.setStyleSheet(
+        theme.style(self.bar, 
             "QTabBar::tab{background:transparent;color:#787b86;padding:5px 14px;border:none;}"
             "QTabBar::tab:hover{color:#d1d4dc;}")
         for name in TABS:
@@ -33,6 +36,9 @@ class BottomPanel(QtWidgets.QWidget):
         self.stack.addWidget(self._build_movers())
         self.stack.addWidget(self._build_alerts())
         self.stack.addWidget(self._build_notes())
+        self.heatmap = HeatmapPanel(cfg)
+        self.heatmap.openSymbol.connect(self.openSymbol)
+        self.stack.addWidget(self.heatmap)
         self.stack.hide()
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -53,6 +59,16 @@ class BottomPanel(QtWidgets.QWidget):
     def toggle(self):
         self._set_expanded(not self.expanded)
 
+    def restyle(self):
+        """Cambió el tema: lo que se pinta a mano se vuelve a pintar."""
+        self._mark_tab()
+        self.heatmap.map.update()
+
+    def show_heatmap(self):
+        """Abre el mapa de calor; si ya estaba a la vista, pliega el panel."""
+        self._on_tab(HEATMAP_TAB)
+        self.bar.setCurrentIndex(HEATMAP_TAB)
+
     def _on_tab(self, i: int):
         if i < 0:
             return
@@ -69,9 +85,9 @@ class BottomPanel(QtWidgets.QWidget):
         self.toggled.emit(on)
 
     def _mark_tab(self):
-        selected = "#ffffff" if self.expanded else "#787b86"
+        selected = "#fefefe" if self.expanded else "#787b86"
         line = "border-bottom:2px solid #2962ff;" if self.expanded else ""
-        self.bar.setStyleSheet(
+        theme.style(self.bar, 
             "QTabBar::tab{background:transparent;color:#787b86;padding:5px 14px;border:none;}"
             "QTabBar::tab:hover{color:#d1d4dc;}"
             f"QTabBar::tab:selected{{color:{selected};{line}}}")

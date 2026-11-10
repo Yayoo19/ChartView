@@ -8,13 +8,14 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 from pyqtgraph.util.garbage_collector import GarbageCollector
 
-from . import alerts, config, data, macro
+from . import alerts, config, data, macro, theme
 from .alerts_ui import AlertsWindow
 from .analysis import AnalysisPanel
 from .bottom_panel import BottomPanel
 from .chart import CANDLE_TYPES, CHART_TYPES, DOWN, UP, fmt_change, fmt_price
 from .chart_types import PARAM_SPECS, TRANSFORMED, transform
-from .dialogs import ChartTypeDialog, CompareDialog, IndicatorDialog, IndicatorEditDialog, SearchDialog
+from .dialogs import (CandleColorsDialog, ChartTypeDialog, CompareDialog, IndicatorDialog, IndicatorEditDialog,
+                      SearchDialog)
 from .drawings import TOOL_GROUPS, TOOLS, DrawingHistory
 from .indicators import REGISTRY, by_category, compute
 from .multichart import LAYOUTS, SYNC_OPTIONS, ChartPane, build_grid, chart_count, layout_icon, translate_time
@@ -45,7 +46,8 @@ SHORTCUTS = [
     ("Ctrl+I", "Indicadores"), ("Ctrl+Alt+A", "Alertas"), ("Ctrl+S", "Guardar imagen de la gráfica"),
     ("Alt+P", "Escala porcentual"), ("Alt+I", "Invertir la escala (gráfica de cabeza)"), ("Ctrl+Z", "Deshacer en los dibujos"), ("Ctrl+Y", "Rehacer en los dibujos"),
     ("Shift+clic", "Medir precio, % y velas"), ("Esc", "Volver al cursor (dibujo)"), ("F11", "Pantalla completa"),
-    ("Ctrl+G", "Encender o apagar la cuadrícula"), ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
+    ("Ctrl+G", "Encender o apagar la cuadrícula"), ("Ctrl+M", "Mapa de calor de la lista activa"),
+    ("Ctrl+T", "Cambiar entre tema oscuro y claro"), ("F1", "Esta ayuda"), ("Ctrl+Q", "Salir"),
 ]
 
 
@@ -152,6 +154,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("ChartView")
         self.resize(1500, 920)
         self.cfg = config.load()
+        theme.configure(self.cfg)
+        theme.apply(STYLE)
         # los cambios seguidos (cargar varias gráficas, arrastrar un borde…) se guardan una sola vez
         self._save_timer = QtCore.QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -304,6 +308,9 @@ class MainWindow(QtWidgets.QMainWindow):
             group.addAction(act)
             self._layout_actions[kind] = act
         menu.addSeparator()
+        saved = menu.addMenu("Diseños guardados")
+        saved.aboutToShow.connect(lambda: self._fill_saved_layouts(saved))
+        menu.addSeparator()
         title = menu.addAction("Sincronizar en todas las gráficas:")
         title.setEnabled(False)
         for key, name in SYNC_OPTIONS:
@@ -367,6 +374,74 @@ class MainWindow(QtWidgets.QMainWindow):
         for p in added:
             self.load(p.want, raw=True, silent=True, pane=p)
         self._save()
+
+    # ---------------------------------------------------- diseños guardados
+    def _fill_saved_layouts(self, menu):
+        menu.clear()
+        saved = self.cfg.get("saved_layouts", {})
+        menu.addAction("Guardar el diseño actual…", self.save_layout_as)
+        if saved:
+            menu.addSeparator()
+            for name, item in saved.items():
+                kind = item.get("layout") if item.get("layout") in LAYOUTS else "1"
+                symbols = ", ".join(st.get("symbol") or "?" for st in item.get("charts", [])[:chart_count(kind)])
+                act = menu.addAction(layout_icon(kind), name, lambda n=name: self.apply_saved_layout(n))
+                act.setToolTip(symbols)
+            menu.addSeparator()
+            sub = menu.addMenu("Eliminar")
+            for name in saved:
+                sub.addAction(name, lambda n=name: self._delete_saved("saved_layouts", n, "el diseño"))
+        menu.setToolTipsVisible(True)
+
+    def _ask_save_name(self, title: str, store: dict, what: str):
+        """Nombre para guardar algo; si ya existe, pregunta antes de reemplazarlo."""
+        name, ok = QtWidgets.QInputDialog.getText(self, title, f"Nombre de {what}:")
+        name = name.strip()
+        if not ok or not name:
+            return None
+        if name in store and QtWidgets.QMessageBox.question(
+                self, title, f"Ya existe «{name}». ¿Reemplazarlo?") != QtWidgets.QMessageBox.Yes:
+            return None
+        return name
+
+    def _delete_saved(self, key: str, name: str, what: str):
+        if QtWidgets.QMessageBox.question(self, "Eliminar", f"¿Eliminar {what} «{name}»?") == QtWidgets.QMessageBox.Yes:
+            self.cfg.get(key, {}).pop(name, None)
+            self._save()
+
+    def save_layout_as(self):
+        """Guarda con nombre el acomodo de gráficas y lo que muestra cada una."""
+        store = self.cfg.setdefault("saved_layouts", {})
+        name = self._ask_save_name("Guardar diseño", store, "el diseño")
+        if name:
+            store[name] = {"layout": self.layout_kind, "charts": deepcopy([p.state() for p in self.panes])}
+            self._save()
+            self.statusBar().showMessage(f"Diseño «{name}» guardado.", 5000)
+
+    def apply_saved_layout(self, name: str):
+        item = deepcopy(self.cfg.get("saved_layouts", {}).get(name))
+        if not item or not item.get("charts"):
+            return
+        kind = item.get("layout") if item.get("layout") in LAYOUTS else "1"
+        n = chart_count(kind)
+        states = item["charts"][:n]
+        states += [states[0]] * (n - len(states))
+        self._remember_sizes()
+        old = self.panes
+        # las gráficas nuevas heredan de la activa lo elegido en la barra de dibujo, así que se crean antes de quitarla
+        self.panes = [self._new_pane(st) for st in states]
+        for p in old:
+            p.retire()
+        self.active = self.panes[0]
+        self._parked = []
+        self.layout_kind = kind
+        self._place_panes()
+        self.layout_btn.setIcon(layout_icon(kind))
+        self._layout_actions[kind].setChecked(True)
+        self._sync_ui()
+        self._load_all()
+        self._save()
+        self.statusBar().showMessage(f"Diseño «{name}» abierto.", 5000)
 
     def _set_sync(self, key: str, on: bool):
         self.sync[key] = on
@@ -479,7 +554,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.menu_btn.setText("☰")
         self.menu_btn.setToolTip("Menú")
         self.menu_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-        self.menu_btn.setStyleSheet("QToolButton::menu-indicator{image:none;}")
+        theme.style(self.menu_btn, "QToolButton::menu-indicator{image:none;}")
         tb.addWidget(self.menu_btn)
         tb.addAction(self.drawbar_act)
         tb.addSeparator()
@@ -537,6 +612,8 @@ class MainWindow(QtWidgets.QMainWindow):
             for d in defs:
                 sub.addAction(d.name, lambda k=d.key: self.add_indicator(k))
         menu.addSeparator()
+        templates = menu.addMenu("Plantillas")
+        templates.aboutToShow.connect(lambda: self._fill_templates(templates))
         menu.addAction("Quitar todos", self._clear_indicators)
         ind_btn.setMenu(menu)
         tb.addWidget(ind_btn)
@@ -561,10 +638,10 @@ class MainWindow(QtWidgets.QMainWindow):
         """Barra bajo la gráfica: cuánta historia ver (rango) y opciones de visualización."""
         w = QtWidgets.QWidget()
         w.setObjectName("rangebar")
-        w.setStyleSheet(
+        theme.style(w, 
             "#rangebar QToolButton{background:transparent;border:none;border-radius:4px;padding:3px 9px;color:#b2b5be;}"
             "#rangebar QToolButton:hover{background:#2a2e39;}"
-            "#rangebar QToolButton:checked{background:#2a2e39;color:#ffffff;}"
+            "#rangebar QToolButton:checked{background:#2a2e39;color:#fefefe;}"
             "#rangebar QToolButton:disabled{color:#4a4e59;}"
             "#rangebar QComboBox{padding:2px 6px;}")
         h = QtWidgets.QHBoxLayout(w)
@@ -617,6 +694,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addAction(self.drawbar_act)
         v.addMenu(self._layout_menu)
         v.addAction("Panel inferior", self.bottom.toggle, QtGui.QKeySequence("Ctrl+J"))
+        v.addAction("Mapa de calor de la lista", self.bottom.show_heatmap, QtGui.QKeySequence("Ctrl+M"))
         v.addSeparator()
         v.addAction(self.log_scale)
         v.addAction(self.pct_scale)
@@ -643,6 +721,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self._grid_actions[name] = act
         grid_menu.addSeparator()
         grid_menu.addAction("Encender / apagar", self._toggle_grid, QtGui.QKeySequence("Ctrl+G"))
+        theme_menu = v.addMenu("Tema")
+        theme_group = QtGui.QActionGroup(theme_menu)
+        self._theme_actions = {}
+        for name in theme.THEMES:
+            act = theme_menu.addAction(name, lambda n=name: self.set_theme(n))
+            act.setCheckable(True)
+            act.setChecked(name == theme.name)
+            theme_group.addAction(act)
+            self._theme_actions[name] = act
+        theme_menu.addSeparator()
+        theme_menu.addAction("Cambiar entre oscuro y claro", self._toggle_theme, QtGui.QKeySequence("Ctrl+T"))
+        v.addAction("Colores de las velas…", self.edit_candle_colors)
 
         t = mb.addMenu("&Herramientas")
         t.addAction("Indicadores…", self.open_indicators, QtGui.QKeySequence("Ctrl+I"))
@@ -720,7 +810,7 @@ class MainWindow(QtWidgets.QMainWindow):
         bar = QtWidgets.QToolBar("Dibujo")
         bar.setOrientation(QtCore.Qt.Vertical)
         bar.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
-        bar.setStyleSheet("QToolBar{background:#1e222d;border:1px solid #2a2e39;border-radius:4px;padding:2px;}"
+        theme.style(bar, "QToolBar{background:#1e222d;border:1px solid #2a2e39;border-radius:4px;padding:2px;}"
                           "QToolButton{min-width:30px;min-height:26px;font-size:15px;border:none;padding:2px;}"
                           "QToolButton:checked{background:#2962ff;border-radius:4px;}"
                           "QToolButton:hover{background:#2a2e39;}"
@@ -842,7 +932,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_draw_color(self, color):
         for p in self.panes:
             p.chart.layer.color = color
-        self.color_btn.setStyleSheet(f"color:{color}; font-size:20px;")
+        theme.style(self.color_btn, f"color:{color}; font-size:20px;")
         self.cfg["draw_color"] = color
 
     def _pick_draw_color(self):
@@ -976,7 +1066,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rail.setFloatable(False)
         rail.setContextMenuPolicy(QtCore.Qt.PreventContextMenu)
         rail.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
-        rail.setStyleSheet("QToolBar{background:#131722;border:none;border-left:1px solid #2a2e39;padding:4px 2px;}"
+        theme.style(rail, "QToolBar{background:#131722;border:none;border-left:1px solid #2a2e39;padding:4px 2px;}"
                            "QToolButton{min-width:26px;min-height:26px;font-size:15px;background:transparent;"
                            "border:none;border-radius:4px;padding:2px;}"
                            "QToolButton:hover{background:#2a2e39;}"
@@ -1369,6 +1459,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     it.setText(2, f"{chg:+.2f}%")
                     it.setForeground(2, QtGui.QColor(UP if chg >= 0 else DOWN))
         names = self.cfg.get("names", {})
+        ok = lambda s: s in q and np.isfinite(q[s][0]) and np.isfinite(q[s][1])  # noqa: E731
+        self.bottom.heatmap.set_groups(self.wl_combo.currentText(), [
+            (section, [(s, names.get(s, ""), q[s][0], q[s][1]) for s in dict.fromkeys(syms) if ok(s)])
+            for section, syms in self._wl().items()])
         self.bottom.set_movers([(s, names.get(s, ""), q[s][0], q[s][1]) for s in getattr(self, "_watch_items", {})
                                 if s in q and np.isfinite(q[s][0]) and np.isfinite(q[s][1])])
 
@@ -1558,8 +1652,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             self.statusBar().showMessage(f"Error al cargar {sym}: {err}", 15000)
             if pane.df is None:  # sin esto, la gráfica quedaría vacía sin decir por qué
-                pane.header.setText(f"<b style='color:#ffffff'>{sym}</b>&nbsp;&nbsp;"
-                                    f"<span style='color:{DOWN}'>no se pudo cargar</span>")
+                pane.header.setText(theme.css(f"<b style='color:#fefefe'>{sym}</b>&nbsp;&nbsp;"
+                                                  f"<span style='color:{DOWN}'>no se pudo cargar</span>"))
             if not silent:
                 QtWidgets.QMessageBox.warning(self, "No se pudo cargar", f"{sym}\n\n{err}")
             if pane is self.active:
@@ -1716,13 +1810,13 @@ class MainWindow(QtWidgets.QMainWindow):
         col = UP if chg >= 0 else DOWN
         if pane.compact:  # varias gráficas: poco ancho, y cada una puede tener otro intervalo
             middle = f"<span style='color:#787b86'>{pane.interval}</span>&nbsp;&nbsp;"
-            price = f"<b style='color:#ffffff'>{fmt_price(last)}</b>&nbsp;"
+            price = f"<b style='color:#fefefe'>{fmt_price(last)}</b>&nbsp;"
         else:
             middle = (f"<span style='color:#d1d4dc'>{name}</span>&nbsp;&nbsp;"
                       f"<span style='color:#787b86'>{' · '.join(x for x in (exch, cur) if x)}</span>&nbsp;&nbsp;&nbsp;")
-            price = f"<b style='color:#ffffff; font-size:17px'>{fmt_price(last)}</b>&nbsp;"
-        pane.header.setText(f"<b style='color:#ffffff'>{pane.symbol}</b>&nbsp;&nbsp;{middle}{price}"
-                            f"<span style='color:{col}'>{fmt_change(chg)} ({pct:+.2f}%)</span>")
+            price = f"<b style='color:#fefefe; font-size:17px'>{fmt_price(last)}</b>&nbsp;"
+        pane.header.setText(theme.css(f"<b style='color:#fefefe'>{pane.symbol}</b>&nbsp;&nbsp;{middle}{price}"
+                                      f"<span style='color:{col}'>{fmt_change(chg)} ({pct:+.2f}%)</span>"))
         if pane is self.active:
             self.setWindowTitle(f"{pane.symbol} {fmt_price(last)} — ChartView")
 
@@ -1750,6 +1844,72 @@ class MainWindow(QtWidgets.QMainWindow):
             del self.indicators[index]
         self.redraw(keep_view=True)
         self._save()
+
+    # ---------------------------------------------------- plantillas
+    def _fill_templates(self, menu):
+        menu.clear()
+        store = self.cfg.get("templates", {})
+        menu.addAction("Guardar los indicadores como plantilla…", self.save_template)
+        if store:
+            menu.addSeparator()
+            for name, item in store.items():
+                act = menu.addAction(name, lambda n=name: self.apply_template(n))
+                act.setToolTip(", ".join(REGISTRY[a["key"]].label({**REGISTRY[a["key"]].defaults(), **(a.get("params") or {})})
+                                         for a in item.get("indicators", []) if a.get("key") in REGISTRY) or "Sin indicadores")
+            menu.addSeparator()
+            sub = menu.addMenu("Eliminar")
+            for name in store:
+                sub.addAction(name, lambda n=name: self._delete_saved("templates", n, "la plantilla"))
+        menu.setToolTipsVisible(True)
+
+    def save_template(self):
+        """Guarda con nombre los indicadores de la gráfica activa, con sus parámetros y colores."""
+        store = self.cfg.setdefault("templates", {})
+        name = self._ask_save_name("Guardar plantilla", store, "la plantilla")
+        if name:
+            store[name] = {"indicators": deepcopy(self.indicators)}
+            self._save()
+            self.statusBar().showMessage(f"Plantilla «{name}» guardada con {len(self.indicators)} indicador(es).", 5000)
+
+    def apply_template(self, name: str):
+        item = self.cfg.get("templates", {}).get(name)
+        if item is None:
+            return
+        self.indicators = [a for a in deepcopy(item.get("indicators", [])) if a.get("key") in REGISTRY]
+        self.redraw(keep_view=True)
+        self._save()
+        self.statusBar().showMessage(f"Plantilla «{name}» aplicada a {self.symbol}.", 5000)
+
+    # ---------------------------------------------------- tema y colores
+    def set_theme(self, name: str):
+        self.cfg["theme"] = name
+        self._retheme()
+
+    def _toggle_theme(self):
+        self.set_theme("Oscuro" if theme.is_light() else "Claro")
+
+    def _retheme(self):
+        """Vuelve a pintar todo con el tema y los colores de velas de la configuración."""
+        theme.configure(self.cfg)
+        theme.apply(STYLE)
+        self._theme_actions[theme.name].setChecked(True)
+        self.layout_btn.setIcon(layout_icon(self.layout_kind))
+        for kind, act in self._layout_actions.items():
+            act.setIcon(layout_icon(kind))
+        for p in self.panes:
+            p.chart.apply_theme()
+            self.redraw(keep_view=True, pane=p)
+        self.bottom.restyle()
+        if self.analysis_dock.isVisible():
+            self.analysis.symbol = None  # el panel se arma de nuevo con los colores del tema
+            self._refresh_analysis()
+        self._save()
+
+    def edit_candle_colors(self):
+        dlg = CandleColorsDialog(theme.up(), theme.down(), self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
+            self.cfg["candle_colors"] = dlg.colors()
+            self._retheme()
 
     def add_indicator(self, key):
         self.indicators.append({"key": key, "params": {}, "color": None})
@@ -2047,25 +2207,6 @@ def app_icon() -> QtGui.QIcon:
     return icon
 
 
-def dark_palette() -> QtGui.QPalette:
-    p = QtGui.QPalette()
-    c = QtGui.QColor
-    roles = {
-        QtGui.QPalette.Window: c("#1e222d"), QtGui.QPalette.WindowText: c("#d1d4dc"),
-        QtGui.QPalette.Base: c("#131722"), QtGui.QPalette.AlternateBase: c("#1e222d"),
-        QtGui.QPalette.ToolTipBase: c("#2a2e39"), QtGui.QPalette.ToolTipText: c("#d1d4dc"),
-        QtGui.QPalette.Text: c("#d1d4dc"), QtGui.QPalette.Button: c("#2a2e39"),
-        QtGui.QPalette.ButtonText: c("#d1d4dc"), QtGui.QPalette.BrightText: c("#ff5252"),
-        QtGui.QPalette.Highlight: c("#2962ff"), QtGui.QPalette.HighlightedText: c("#ffffff"),
-        QtGui.QPalette.PlaceholderText: c("#787b86"),
-    }
-    for role, color in roles.items():
-        p.setColor(role, color)
-    p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, c("#5d606b"))
-    p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text, c("#5d606b"))
-    return p
-
-
 STYLE = """
 QToolBar { background:#1e222d; border:none; border-bottom:1px solid #2a2e39; padding:4px; spacing:4px; }
 QComboBox, QLineEdit, QPushButton, QToolButton, QSpinBox, QDoubleSpinBox {
@@ -2096,9 +2237,7 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("ChartView")
     app.setQuitOnLastWindowClosed(False)  # puede seguir en la bandeja vigilando alertas
-    app.setStyle("Fusion")
-    app.setPalette(dark_palette())
-    app.setStyleSheet(STYLE)
+    app.setStyle("Fusion")  # la paleta y los estilos los pone el tema, al crear la ventana
     # Python podría recolectar basura en un hilo de descarga y destruir ahí objetos de Qt, lo que
     # tumba la app: así solo se recolecta en el hilo de la interfaz.
     collector = GarbageCollector(interval=1.0)  # noqa: F841 - debe seguir vivo mientras corre la app

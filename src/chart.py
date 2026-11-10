@@ -6,8 +6,10 @@ import pandas as pd
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import theme
 from .drawings import DrawingLayer, DrawViewBox
-from .indicators import DOWN, UP, Computed, Out
+from .indicators import DOWN, UP, Computed, Out  # noqa: F401 - UP y DOWN los importan otros módulos desde aquí
+from .volprofile import VisibleProfileItem
 
 BG = "#131722"
 FG = "#b2b5be"
@@ -108,8 +110,8 @@ class CandleItem(pg.GraphicsObject):
         super().__init__()
         self._pic = QtGui.QPicture()
         p = QtGui.QPainter(self._pic)
-        pens = {True: pg.mkPen(UP), False: pg.mkPen(DOWN)}
-        brushes = {True: pg.mkBrush(UP), False: pg.mkBrush(DOWN)}
+        pens = {True: pg.mkPen(theme.up()), False: pg.mkPen(theme.down())}
+        brushes = {True: pg.mkBrush(theme.up()), False: pg.mkBrush(theme.down())}
         w = 0.36
         QPF = QtCore.QPointF
         for i in range(len(x)):
@@ -182,8 +184,8 @@ class BaselineItem(pg.GraphicsObject):
         area = QtGui.QPolygonF([QtCore.QPointF(self._pts[0].x(), base)] + self._pts
                                + [QtCore.QPointF(self._pts[-1].x(), base)])
         left, width = r.left() - 1, r.width() + 2
-        bands = ((QtCore.QRectF(left, base, width, max(r.bottom() - base, 0) + 1), UP),
-                 (QtCore.QRectF(left, r.top() - 1, width, max(base - r.top(), 0) + 1), DOWN))
+        bands = ((QtCore.QRectF(left, base, width, max(r.bottom() - base, 0) + 1), theme.up()),
+                 (QtCore.QRectF(left, r.top() - 1, width, max(base - r.top(), 0) + 1), theme.down()))
         for band, color in bands:
             p.save()
             p.setClipRect(band)
@@ -210,7 +212,7 @@ class KagiItem(pg.GraphicsObject):
         super().__init__()
         self._pic = QtGui.QPicture()
         p = QtGui.QPainter(self._pic)
-        yang_pen, yin_pen = pg.mkPen(UP, width=2.5), pg.mkPen(DOWN, width=1.2)
+        yang_pen, yin_pen = pg.mkPen(theme.up(), width=2.5), pg.mkPen(theme.down(), width=1.2)
         QPF = QtCore.QPointF
         yang = bool(len(c) and c[0] >= o[0])
         shoulder = waist = None
@@ -260,7 +262,7 @@ class PointFigureItem(pg.GraphicsObject):
         super().__init__()
         self._pic = QtGui.QPicture()
         p = QtGui.QPainter(self._pic)
-        up_pen, down_pen = pg.mkPen(UP, width=1.4), pg.mkPen(DOWN, width=1.4)
+        up_pen, down_pen = pg.mkPen(theme.up(), width=1.4), pg.mkPen(theme.down(), width=1.4)
         QPF = QtCore.QPointF
         lo, hi = np.inf, -np.inf
         w = 0.36
@@ -489,7 +491,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setBackground(BG)
+        self.setBackground(theme.c(BG))
         self._cursor_i = None  # vela donde está la línea vertical del cursor
         self.ci.layout.setContentsMargins(2, 2, 2, 2)
         self.ci.layout.setSpacing(1)
@@ -793,7 +795,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
     def _make_tag(self) -> QtWidgets.QLabel:
         tag = QtWidgets.QLabel(self)
-        tag.setStyleSheet("background:#434651; color:#ffffff; padding:1px 5px; border-radius:2px; font-size:11px;")
+        theme.style(tag, "background:#434651; color:#ffffff; padding:1px 5px; border-radius:2px; font-size:11px;")
         tag.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
         tag.hide()
         return tag
@@ -844,6 +846,10 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._xtag.show()
         self._xtag.raise_()
 
+    def apply_theme(self):
+        """Fondo y etiquetas del tema actual; lo dibujado se actualiza al redibujar la gráfica."""
+        self.setBackground(theme.c(BG))
+
     # ------------------------------------------------------------------ util
     def _new_plot(self, row: int, n_dates) -> pg.PlotItem:
         axis = DateAxis(orientation="bottom")
@@ -858,12 +864,12 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         p.hideButtons()
         for name in ("right", "bottom"):
             ax = p.getAxis(name)
-            ax.setPen(pg.mkPen(GRID))
-            ax.setTextPen(pg.mkPen(FG))
+            ax.setPen(pg.mkPen(theme.c(GRID)))
+            ax.setTextPen(pg.mkPen(theme.c(FG)))
         vb = p.getViewBox()
         vb.setMouseEnabled(x=True, y=False)
         vb.disableAutoRange()
-        pen = pg.mkPen(CROSS, width=1, style=QtCore.Qt.DashLine)
+        pen = pg.mkPen(theme.c(CROSS), width=1, style=QtCore.Qt.DashLine)
         v = pg.InfiniteLine(angle=90, movable=False, pen=pen)
         h = pg.InfiniteLine(angle=0, movable=False, pen=pen)
         p.addItem(v, ignoreBounds=True)
@@ -898,6 +904,14 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
     def _draw_out(self, plot, out: Out, x, color, tf=None):
         xs = x + out.offset
+        if out.kind == "vprofile":
+            df, o = self.df, out.opts or {}
+            lo, hi = df["Low"].to_numpy(float), df["High"].to_numpy(float)
+            item = VisibleProfileItem(tf(lo) if tf else lo, tf(hi) if tf else hi, df["Volume"].to_numpy(float),
+                                      (df["Close"] >= df["Open"]).to_numpy(), int(o.get("rows", 24)),
+                                      float(o.get("va", 70)), float(o.get("width", 30)), bool(o.get("right", True)))
+            plot.addItem(item, ignoreBounds=True)
+            return
         if out.kind == "vline":
             pen = pg.mkPen(color, width=out.width, style=_STYLES.get(out.style, QtCore.Qt.SolidLine))
             labels = out.labels or [None] * len(out.y)
@@ -964,6 +978,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 color = next(palette_iter)
             if color is None:
                 color = "#2962ff"
+            color = theme.c(color)  # una línea blanca no se vería en el tema claro
             self._draw_out(plot, o, x, color, tf)
             if o.show_value:
                 outs.append((o, color if len(color) <= 7 else color[:7]))
@@ -1067,14 +1082,14 @@ class ChartWidget(pg.GraphicsLayoutWidget):
 
         last = df["Close"].iloc[-1] if last_price is None else last_price
         prev = df["Close"].iloc[-2] if n > 1 else last
-        lc = UP if last >= prev else DOWN
+        lc = theme.up() if last >= prev else theme.down()
         last_line = pg.InfiniteLine(
             pos=float(tf(last)) if tf else last, angle=0, movable=False, pen=pg.mkPen(lc, width=1, style=QtCore.Qt.DotLine))
         main.addItem(last_line, ignoreBounds=True)
         self._last_line = last_line
         # texto base de la etiqueta del eje; la cuenta regresiva se agrega abajo
         self._last_text = f"{fmt_price(last)}\n{(last / pct_base - 1) * 100:+.2f}%" if pct_base else fmt_price(last)
-        self._pricetag.setStyleSheet(PRICE_TAG_STYLE.format(color=lc))
+        theme.style(self._pricetag, PRICE_TAG_STYLE.format(color=lc))
         self._pricetag.setText("")
         main.getViewBox().sigRangeChanged.connect(self._place_price_tag)
         self._last_value = float(last)
@@ -1083,7 +1098,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         self._candle_end = None
 
         if title:
-            wm = pg.TextItem(title, color="#ffffff12", anchor=(0.5, 0.5))
+            wm = pg.TextItem(title, color="#00000012" if theme.is_light() else "#ffffff12", anchor=(0.5, 0.5))
             f = QtGui.QFont()
             f.setPointSize(self.watermark_size)
             f.setBold(True)
@@ -1183,7 +1198,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 continue
             line = pg.InfiniteLine(
                 pos=y, angle=0, movable=False, pen=pg.mkPen("#ff9800", width=1, style=QtCore.Qt.DashDotLine),
-                label=f"🔔 {text}", labelOpts={"position": 0.86, "color": "#ff9800", "fill": "#131722dd",
+                label=f"🔔 {text}", labelOpts={"position": 0.86, "color": "#ff9800", "fill": theme.c("#131722dd"),
                                                "anchors": [(1, 1), (1, 1)]})
             line.setZValue(40)
             main.addItem(line, ignoreBounds=True)
@@ -1415,7 +1430,7 @@ class ChartWidget(pg.GraphicsLayoutWidget):
                 lines.append(f"<div>{text}</div>")  # un bloque por renglón: así se sabe qué indicador se tocó
             # como con la línea del cursor: si el texto se acorta, Qt puede no borrar el final del anterior
             before = legend.sceneBoundingRect()
-            legend.setHtml("".join(lines))
+            legend.setHtml(theme.css("".join(lines)))
             area = self.mapFromScene(before.united(legend.sceneBoundingRect())).boundingRect()
             self.viewport().update(area.adjusted(-2, -2, 2, 2))
 
@@ -1423,16 +1438,16 @@ class ChartWidget(pg.GraphicsLayoutWidget):
         prev = df["Close"].iloc[ic - 1] if ic > 0 else r["Open"]
         chg = r["Close"] - prev
         pct = chg / prev * 100 if prev else 0
-        col = UP if chg >= 0 else DOWN
+        col = theme.up() if chg >= 0 else theme.down()
         date = fmt_date(df.index[ic], self._intraday)
 
         def kv(k, v):
             return f"<span style='color:{FG}'>{k}</span> <span style='color:{col}'>{v}</span>"
 
-        self.hovered.emit("&nbsp;&nbsp;".join([
+        self.hovered.emit(theme.css("&nbsp;&nbsp;".join([
             f"<span style='color:#d1d4dc'>{date}</span>",
             kv("A", fmt_price(r["Open"])), kv("Max", fmt_price(r["High"])),
             kv("Min", fmt_price(r["Low"])), kv("C", fmt_price(r["Close"])),
             f"<span style='color:{col}'>{fmt_change(chg)} ({pct:+.2f}%)</span>",
             kv("Vol", fmt_big(r["Volume"])),
-        ]))
+        ])))

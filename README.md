@@ -1,6 +1,6 @@
 # ChartView
 
-Aplicación de escritorio en Python para graficar acciones de México (BMV), EE.UU. y criptomonedas, con más de 70 indicadores técnicos. Corre localmente; los datos se descargan de Yahoo Finance y, para cripto, de Binance.
+Aplicación de escritorio en Python para graficar acciones de México (BMV), EE.UU. y criptomonedas, con más de 70 indicadores técnicos, perfil de volumen, herramientas de dibujo, mapa de calor y temas claro y oscuro. Corre localmente; los datos se descargan de Yahoo Finance y, para cripto, de Binance.
 
 ## Ejecutar
 
@@ -56,6 +56,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
   - **Movimientos:** los símbolos de la lista activa, de mayor a menor cambio. Un clic abre el símbolo.
   - **Alertas:** las últimas alertas disparadas. Un clic abre el símbolo.
   - **Notas:** texto libre por símbolo, que se guarda solo.
+  - **Mapa de calor** (también Ver → Mapa de calor de la lista o Ctrl+M): un cuadro por símbolo de la lista activa, agrupados por sección y ordenados de mayor a menor cambio del día. Verde si sube y rojo si baja, más intenso cuanto mayor es el cambio; el selector de la derecha (± 1 % a ± 10 %) fija con qué cambio se llega al color más fuerte. Un clic abre el símbolo. Todos los cuadros miden lo mismo. Usa las mismas cotizaciones que la lista, así que se actualiza con ella; para ver otra lista, cámbiala en el panel de listas.
 - **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
 - **Panel de análisis** (📊 a la derecha, Ver → Panel de análisis o Ctrl+E), para acciones con cobertura de analistas:
   - Próximo reporte trimestral con su fecha, la utilidad por acción y los ingresos estimados.
@@ -67,6 +68,8 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - **Paneles inferiores (RSI, MACD, volumen…):** arrastra el borde entre dos paneles para cambiar su altura; la app la recuerda. Arrastra el eje de valores de un panel o usa la rueda sobre él para estirar la escala, y después arrastra dentro del panel para moverla en vertical. Doble clic dentro de un panel lo oculta y deja solo una franja con su nombre; otro doble clic en la franja lo vuelve a mostrar. Doble clic en el eje vuelve a la escala automática, doble clic en un borde a las alturas originales, y Ver → Restablecer paneles inferiores deshace todo, incluidos los paneles ocultos. La escala a mano se mantiene al actualizar y se reinicia al cambiar de símbolo o intervalo.
 - **Cuenta regresiva:** en todos los intervalos, la etiqueta del último precio muestra cuánto falta para que cierre la vela actual, según el horario de cada mercado (cripto opera todo el día y cierra a la medianoche UTC). Las velas de semana, mes o más cierran con la última sesión hábil de su periodo. Si la vela ya cerró (mercado cerrado) no se muestra.
 - **Cuadrícula de fondo:** Ver → Cuadrícula (sin cuadrícula, suave, media o fuerte); Ctrl+G la enciende y apaga.
+- **Tema:** Ver → Tema (oscuro o claro); Ctrl+T cambia entre los dos sin reiniciar. En el tema claro, las líneas blancas (como la SMA 200 inicial) se dibujan en negro.
+- **Colores de las velas:** Ver → Colores de las velas elige el color alcista y el bajista. Aplica a velas, barras, Heikin Ashi, Renko, Kagi, Point & Figure, línea base y al perfil de volumen. «Restablecer» vuelve al verde y rojo originales.
 - **Menú ☰:** Archivo (buscar, importar CSV, guardar imagen), Ver (paneles, escala, cuadrícula, actualización, pantalla completa), Herramientas (indicadores, alertas, clave de FRED) y Ayuda (atajos de teclado: F1).
 
 ### Varias gráficas
@@ -74,6 +77,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 - **Diseño:** el botón de cuadrícula arriba a la derecha (o Ver → Diseño de gráficas) acomoda de 1 a 8 gráficas en columnas, filas o cuadrícula. Arrastra el borde entre dos gráficas para cambiar su tamaño. La app recuerda el diseño, los tamaños y cada gráfica.
 - **Gráfica activa:** la del borde azul; se elige con un clic. La barra superior, los rangos, Indicadores, Comparar, el panel de análisis y la lista de seguimiento actúan sobre ella. El símbolo, el intervalo, el periodo, el tipo, la escala log, los indicadores y las comparaciones son propios de cada gráfica.
 - **Al agregar gráficas:** una nueva empieza como copia de la activa. Si reduces el diseño, las que sobran se guardan y regresan al volver a ampliarlo.
+- **Diseños guardados** (en el mismo botón): «Guardar el diseño actual…» guarda con nombre el acomodo y lo que muestra cada gráfica (símbolo, intervalo, tipo, indicadores, comparaciones). Al elegir uno guardado se abre tal cual; «Eliminar» lo borra.
 - **Sincronizar** (en el mismo botón): símbolo, intervalo, cursor (encendido por omisión) y rango de tiempo. Sincronizar el rango también lleva a todas el periodo que elijas abajo de la gráfica. Un símbolo solo pasa a las demás cuando ya cargó, así que uno mal escrito no las afecta.
 - **Cursor y rango entre mercados:** en intradía se alinean por el instante real, aunque cada gráfica muestre la hora de su mercado: las 15:30 de Nueva York coinciden con las 19:30 o 20:30 UTC de Binance, según el horario de verano. Si alguna de las gráficas es diaria o mayor, se alinean por la fecha de calendario. Las series sin zona horaria conocida, como las macro o los CSV, se alinean por la fecha que muestran.
 - **Dibujos:** son del símbolo, así que aparecen en todas las gráficas que lo muestren. La barra de dibujo es una sola: elige la herramienta y dibuja en la gráfica que quieras.
@@ -91,6 +95,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
 
 - Rueda del mouse: zoom en el tiempo · arrastrar: desplazar · el eje Y se ajusta solo.
 - **Indicadores** (Ctrl+I): catálogo por categorías, parámetros editables, color y orden. La flecha del botón agrega un indicador directo con valores por defecto.
+- **Plantillas de indicadores** (flecha del botón Indicadores → Plantillas): guarda con nombre los indicadores de la gráfica activa, con sus parámetros y colores, y aplícalos después a cualquier símbolo o gráfica. Aplicar una plantilla sustituye los indicadores que hubiera.
 - **Leyenda de la gráfica:** al pasar el mouse sobre un indicador (por ejemplo "EMA 20") aparecen ⚙ configurar, 👁 ocultar/mostrar y ✕ quitar; con clic derecho, el mismo menú. Los ocultos quedan en gris para volver a mostrarlos.
 - Tipos de gráfica: velas, velas huecas, Heikin Ashi, barras OHLC, línea, área, línea base, Renko, Kagi, Point & Figure y Line Break.
   - **Línea base:** verde arriba y rojo abajo de la mitad del rango visible.
@@ -107,11 +112,17 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
   - **Mover sin arrastrar:** clic derecho sobre el símbolo → «Mover a sección».
   - **Agregar actual:** pone el símbolo en la sección seleccionada. Si no hay ninguna seleccionada, va a la de su mercado. El orden nunca cambia solo.
 - **Dibujo** (barra vertical a la izquierda de la gráfica; se oculta y se muestra con **✎** en la barra superior, Ver → Herramientas de dibujo o Ctrl+D):
-  - Herramientas agrupadas: cursor; líneas (horizontal, rayo horizontal, vertical, tendencia, rayo, flecha); canales (canal paralelo, tridente de Andrews); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (PNG/JPG…); Fibonacci (retroceso y extensión por tendencia); trading (medir, posición larga, posición corta, VWAP anclado); borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
+  - Herramientas agrupadas: cursor; líneas (horizontal, rayo horizontal, vertical, tendencia, rayo, flecha); canales (canal paralelo, tridente de Andrews, canal de regresión); formas (rectángulo, círculo/elipse, dibujo libre); texto e imagen (texto, nota, globo de texto, imagen PNG/JPG…); Fibonacci y Gann (retroceso, extensión por tendencia, abanico, zonas de tiempo, caja de Gann); patrones (onda de impulso de Elliott, corrección ABC, XABCD); trading (medir, rango de fecha y precio, posición larga, posición corta, VWAP anclado, perfil de volumen de rango fijo); borrador. La flechita de cada grupo abre sus herramientas y el botón recuerda la última que usaste.
   - **Medir:** Shift+clic (o Shift+arrastrar) en cualquier momento, o la herramienta 📏. Muestra el cambio de precio, el %, las velas y el tiempo. Otro clic o Esc la quita; no se guarda.
   - **Posición larga o corta:** clic o arrastra hasta el objetivo. Las asas ajustan objetivo, stop y ancho, y la caja muestra el riesgo/beneficio.
   - **VWAP anclado:** clic en la vela de inicio. Arrastra el asa para cambiarla. Las series sin volumen no lo tienen.
   - **Canal, tridente y extensión de Fibonacci** se trazan con 3 clics.
+  - **Patrones:** la onda de Elliott se traza con 6 clics (inicio y ondas 1 a 5), la corrección ABC con 4 y el XABCD con 5. Cada punto lleva su número o letra. El XABCD muestra sobre las líneas punteadas la proporción de cada tramo: AB/XA, BC/AB, CD/BC y AD/XA.
+  - **Abanico de Fibonacci:** arrastra de inicio a fin; cada rayo sale del inicio y pasa por un nivel del retroceso. **Zonas de tiempo:** arrastra el ancho de una unidad y aparecen líneas verticales a 0, 1, 2, 3, 5, 8, 13… unidades. **Caja de Gann:** arrastra de esquina a esquina; divide el precio y el tiempo en 25 %, 38.2 %, 50 %, 61.8 % y 75 %.
+  - **Canal de regresión:** arrastra sobre las velas; traza la recta de regresión de los cierres de ese tramo y dos paralelas a 2 desviaciones estándar. Solo en la gráfica de precio.
+  - **Rango de fecha y precio:** como Medir, pero se queda en la gráfica: cambio de precio, %, velas y tiempo.
+  - **Nota y globo de texto:** la nota es un texto en un recuadro; el globo se arrastra desde lo que señalas hasta donde va el texto. Clic derecho → «Editar texto…» en ambos.
+  - **Perfil de volumen de rango fijo:** arrastra sobre las velas a medir. Muestra el volumen de ese tramo por nivel de precio, con el área de valor (70 %) más marcada y el POC como línea punteada. Clic derecho → «Filas del perfil» (12, 24, 48 o 96). Solo en la gráfica de precio.
   - **Sobre indicadores:** todas las herramientas funcionan también en los paneles inferiores (RSI, MACD, volumen…) para marcar tendencias o formaciones: dibuja en el panel que quieras. Cada dibujo queda ligado a ese indicador y a su valor, y reaparece si lo quitas y lo vuelves a agregar. Las líneas verticales cruzan siempre todos los paneles.
   - **Imán (🧲):** al dibujar, el punto se pega a la apertura, máximo, mínimo o cierre de la vela. En un panel se pega a las líneas del indicador. En modo débil solo si estás cerca; en modo fuerte, siempre. Un clic en 🧲 lo enciende o apaga y la flechita elige el modo. No aplica al dibujo libre.
   - Con el cursor (↖) puedes mover y redimensionar lo dibujado. Clic derecho sobre un dibujo cambia el color o el grosor, lo duplica, lo bloquea o lo elimina. Uno bloqueado no se mueve ni se borra con el borrador.
@@ -138,9 +149,17 @@ La configuración se guarda en `%USERPROFILE%\.chartview\config.json`.
 - **Bandas y canales:** Bollinger, Keltner, Donchian, Envolventes, Ichimoku, Pivotes.
 - **Tendencia:** Parabolic SAR, Supertrend, Chandelier Exit, ZigZag, Fractales, ADX/DMI, Aroon, Oscilador Aroon, Vortex.
 - **Osciladores:** RSI, MACD, Estocástico, StochRSI, CCI, Williams %R, ROC, Momentum, TRIX, Awesome, Ultimate, PPO, TSI, Elder Ray, DPO, Coppock, Fisher, KST, CMO, RVGI, BOP, Squeeze Momentum, Schaff Trend Cycle, Connors RSI.
-- **Volumen:** Volumen, VWAP, OBV, MFI, CMF, A/D, Chaikin Oscillator, Force Index, EOM, PVT, Klinger.
+- **Volumen:** Volumen, VWAP, Perfil de volumen (rango visible), OBV, MFI, CMF, A/D, Chaikin Oscillator, Force Index, EOM, PVT, Klinger.
 - **Fibonacci y Gann:** Retroceso de Fibonacci automático (con extensiones), Zonas de tiempo de Fibonacci, Bandas de Fibonacci, Abanico de Gann, Cuadrado de 9 de Gann, Gann HiLo Activator. Se calculan sobre el máximo y el mínimo de las últimas N velas (parámetro «Velas a analizar»).
 - **Volatilidad:** ATR, NATR, Desviación estándar, Volatilidad histórica, %B, Ancho de Bollinger, Choppiness, Mass Index, Ulcer Index.
+
+### Perfil de volumen
+
+- **Rango visible (VPVR):** se agrega como indicador (Volumen → Perfil de volumen). Dibuja barras horizontales con el volumen negociado en cada nivel de precio de las velas que se ven, y se recalcula al mover o acercar la gráfica. Parámetros: filas, % del área de valor, ancho y lado (derecha o izquierda).
+- **Rango fijo:** es una herramienta de dibujo (grupo Trading) y mide solo el tramo que marques.
+- En ambos, cada barra se divide en volumen de velas alcistas y bajistas. Las barras fuertes son el área de valor y la línea punteada amarilla es el POC, el nivel con más volumen.
+- El volumen de cada vela se reparte parejo entre su mínimo y su máximo: es una aproximación, porque Yahoo y Binance no dan el volumen por precio. Con velas más chicas (menor intervalo) el perfil es más fino.
+- Las series sin volumen (índices, tasas, macro) cuentan cada vela como 1: el perfil muestra cuánto tiempo pasó el precio en cada nivel.
 
 Para agregar uno nuevo, decora una función en `src/indicators.py` con `@indicator(...)`. Aparece solo en los menús.
 

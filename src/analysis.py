@@ -4,6 +4,7 @@ from __future__ import annotations
 import pandas as pd
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import theme
 from .chart import DOWN, UP, fmt_big, fmt_price
 
 MUTED = "#9598a1"
@@ -43,15 +44,15 @@ class RecsBars(QtWidgets.QWidget):
         for k, (key, label, color) in enumerate(REC_ROWS):
             y = 2 + k * 20
             n = self.counts.get(key, 0)
-            p.setPen(QtGui.QColor(MUTED))
+            p.setPen(QtGui.QColor(theme.c(MUTED)))
             p.drawText(QtCore.QRectF(0, y, label_w, 16), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, label)
             p.setPen(QtCore.Qt.NoPen)
-            p.setBrush(QtGui.QColor("#2a2e39"))
+            p.setBrush(QtGui.QColor(theme.c("#2a2e39")))
             p.drawRoundedRect(QtCore.QRectF(label_w, y + 3, bar_w, 10), 3, 3)
             if n:
                 p.setBrush(QtGui.QColor(color))
                 p.drawRoundedRect(QtCore.QRectF(label_w, y + 3, bar_w * n / total_max, 10), 3, 3)
-            p.setPen(QtGui.QColor("#d1d4dc"))
+            p.setPen(QtGui.QColor(theme.c("#d1d4dc")))
             p.drawText(QtCore.QRectF(label_w + bar_w + 6, y, count_w, 16), QtCore.Qt.AlignVCenter, str(n))
 
 
@@ -80,14 +81,14 @@ class TargetRange(QtWidgets.QWidget):
             pn.setCapStyle(QtCore.Qt.RoundCap)
             return pn
 
-        p.setPen(pen("#2a2e39"))
+        p.setPen(pen(theme.c("#2a2e39")))
         p.drawLine(QtCore.QPointF(x0, y), QtCore.QPointF(x1, y))
         p.setPen(pen("#2962ff"))
         p.drawLine(QtCore.QPointF(px(self.low), y), QtCore.QPointF(px(self.high), y))
         f = p.font()
         f.setPointSizeF(f.pointSizeF() - 1)
         p.setFont(f)
-        for v, color, label, above in ((self.mean, "#ff9800", "promedio", True), (self.current, "#ffffff", "actual", False)):
+        for v, color, label, above in ((self.mean, "#ff9800", "promedio", True), (self.current, theme.c("#ffffff"), "actual", False)):
             if v is None:
                 continue
             x = px(v)
@@ -121,7 +122,7 @@ class AnalysisPanel(QtWidgets.QScrollArea):
                 item.widget().deleteLater()
 
     def _label(self, html: str, size=None, color=None, wrap=True):
-        lab = QtWidgets.QLabel(html)
+        lab = QtWidgets.QLabel(theme.css(html))
         lab.setTextFormat(QtCore.Qt.RichText)
         lab.setWordWrap(wrap)
         style = []
@@ -129,7 +130,7 @@ class AnalysisPanel(QtWidgets.QScrollArea):
             style.append(f"font-size:{size}px")
         if color:
             style.append(f"color:{color}")
-        lab.setStyleSheet(";".join(style))
+        theme.style(lab, ";".join(style))
         self._lay.addWidget(lab)
         return lab
 
@@ -138,7 +139,7 @@ class AnalysisPanel(QtWidgets.QScrollArea):
         self._label(f"<b>{title}</b>", size=13, color="#d1d4dc")
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.HLine)
-        line.setStyleSheet("color:#2a2e39;")
+        theme.style(line, "color:#2a2e39;")
         self._lay.addWidget(line)
 
     def _table(self, headers, rows, colors=None, align_right_from=1):
@@ -272,7 +273,7 @@ class AnalysisPanel(QtWidgets.QScrollArea):
                 colors.append([None, "#ff9800" if key == "mean" else None, UP if (pot or 0) >= 0 else DOWN])
             if current:
                 rows.insert(0, ["Actual", fmt_price(current), ""])
-                colors.insert(0, [None, "#ffffff", None])
+                colors.insert(0, [None, theme.c("#ffffff"), None])
             self._table(["", f"Precio ({cur})" if cur else "Precio", "Potencial"], rows, colors)
             self._lay.addWidget(TargetRange(tg.get("low"), tg.get("high"), tg.get("mean"), current))
 

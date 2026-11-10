@@ -5,7 +5,7 @@ from copy import deepcopy
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import data
+from . import data, theme
 from .indicators import REGISTRY, by_category
 from .workers import run_task
 
@@ -26,10 +26,10 @@ class ColorButton(QtWidgets.QPushButton):
     def _refresh(self):
         if self.color:
             self.setText(self.color)
-            self.setStyleSheet(f"background:{self.color}; color:#000; border:1px solid #555; padding:3px 8px;")
+            theme.style(self, f"background:{self.color}; color:#000; border:1px solid #555; padding:3px 8px;")
         else:
             self.setText("Automático")
-            self.setStyleSheet("")
+            theme.style(self, "")
 
     def _pick(self):
         c = QtWidgets.QColorDialog.getColor(QtGui.QColor(self.color or "#2962ff"), self, "Color de la línea")
@@ -82,7 +82,7 @@ class IndicatorEditDialog(QtWidgets.QDialog):
         if d.description:
             desc = QtWidgets.QLabel(d.description)
             desc.setWordWrap(True)
-            desc.setStyleSheet("color:#9598a1;")
+            theme.style(desc, "color:#9598a1;")
             lay.addWidget(desc)
         form = QtWidgets.QFormLayout()
         self._editors = build_param_editors(form, d, {**d.defaults(), **instance.get("params", {})})
@@ -156,11 +156,11 @@ class IndicatorDialog(QtWidgets.QDialog):
         mid = QtWidgets.QWidget()
         ml = QtWidgets.QVBoxLayout(mid)
         self.title = QtWidgets.QLabel("Selecciona un indicador")
-        self.title.setStyleSheet("font-size:14px; font-weight:bold;")
+        theme.style(self.title, "font-size:14px; font-weight:bold;")
         self.title.setWordWrap(True)
         self.desc = QtWidgets.QLabel("")
         self.desc.setWordWrap(True)
-        self.desc.setStyleSheet("color:#9598a1;")
+        theme.style(self.desc, "color:#9598a1;")
         self.form_box = QtWidgets.QGroupBox("Parámetros")
         self.form = QtWidgets.QFormLayout(self.form_box)
         self.color_btn = ColorButton()
@@ -346,6 +346,29 @@ class ChartTypeDialog(QtWidgets.QDialog):
         return {k: w.value() for k, w in self._editors.items()}
 
 
+class CandleColorsDialog(QtWidgets.QDialog):
+    """Colores de las velas alcistas y bajistas (también barras, Renko, Kagi y perfil de volumen)."""
+
+    def __init__(self, up: str, down: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Colores de las velas")
+        form = QtWidgets.QFormLayout(self)
+        self._up, self._down = ColorButton(), ColorButton()
+        self._up.set_color(up)
+        self._down.set_color(down)
+        form.addRow("Alcista (cierra arriba):", self._up)
+        form.addRow("Bajista (cierra abajo):", self._down)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        reset = buttons.addButton("Restablecer", QtWidgets.QDialogButtonBox.ResetRole)
+        reset.clicked.connect(lambda: (self._up.set_color(theme.UP_DEFAULT), self._down.set_color(theme.DOWN_DEFAULT)))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def colors(self) -> dict:
+        return {"up": self._up.color or theme.UP_DEFAULT, "down": self._down.color or theme.DOWN_DEFAULT}
+
+
 class CompareDialog(QtWidgets.QDialog):
     """Elegir un símbolo para comparar, con el mismo buscador de la barra superior."""
 
@@ -360,7 +383,7 @@ class CompareDialog(QtWidgets.QDialog):
         tip = QtWidgets.QLabel("Escribe un símbolo o un nombre. La gráfica mostrará el % de cambio de cada "
                                "uno desde el inicio del periodo elegido abajo (1A, 5A…).")
         tip.setWordWrap(True)
-        tip.setStyleSheet("color:#9598a1;")
+        theme.style(tip, "color:#9598a1;")
         lay.addWidget(tip)
         self.search = SymbolSearch(known_symbols)
         self.search.symbolChosen.connect(self._chosen)
@@ -403,7 +426,7 @@ class SearchDialog(QtWidgets.QDialog):
         row.addWidget(btn)
         lay.addLayout(row)
         self.status = QtWidgets.QLabel("Escribe un nombre y presiona Enter. Doble clic para abrir.")
-        self.status.setStyleSheet("color:#9598a1;")
+        theme.style(self.status, "color:#9598a1;")
         lay.addWidget(self.status)
         self.table = QtWidgets.QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Símbolo", "Nombre", "Bolsa", "Tipo"])

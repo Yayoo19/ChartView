@@ -6,6 +6,7 @@ from copy import deepcopy
 import pandas as pd
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import theme
 from .chart import ChartWidget
 from .indicators import REGISTRY
 
@@ -69,7 +70,7 @@ def layout_icon(kind: str, size: int = 18) -> QtGui.QIcon:
     pm = QtGui.QPixmap(size, size)
     pm.fill(QtCore.Qt.transparent)
     p = QtGui.QPainter(pm)
-    p.setPen(QtGui.QPen(QtGui.QColor("#d1d4dc"), 1))
+    p.setPen(QtGui.QPen(QtGui.QColor(theme.c("#d1d4dc")), 1))
     p.setBrush(QtCore.Qt.NoBrush)
 
     def walk(node, r: QtCore.QRectF):
@@ -158,11 +159,11 @@ class ChartPane(QtWidgets.QFrame):
     def set_appearance(self, compact: bool, active: bool):
         """``compact``: hay varias gráficas en la ventana. ``active``: es la que recibe las órdenes."""
         self.compact = compact
-        self.header.setStyleSheet(f"background:transparent; font-size:{13 if compact else 15}px; padding:1px 2px;")
-        self.info.setStyleSheet(f"background:transparent; font-size:{11 if compact else 12}px; padding:0 2px;")
+        theme.style(self.header, f"background:transparent; font-size:{13 if compact else 15}px; padding:1px 2px;")
+        theme.style(self.info, f"background:transparent; font-size:{11 if compact else 12}px; padding:0 2px;")
         self.chart.set_compact(compact)
         color = "transparent" if not compact else "#2962ff" if active else "#2a2e39"
-        self.setStyleSheet(f"#chartpane{{border:1px solid {color};}}")
+        theme.style(self, f"#chartpane{{border:1px solid {color};}}")
         self._place_labels()
 
     def state(self) -> dict:

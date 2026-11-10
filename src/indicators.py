@@ -43,7 +43,8 @@ class Out:
 
     kind: line | dots | hist | fill (relleno entre y e y2) | cloud (relleno
     verde/rojo según y >= y2, estilo nube de Ichimoku) | vline (líneas
-    verticales; aquí ``y`` son las posiciones X y ``labels`` sus textos).
+    verticales; aquí ``y`` son las posiciones X y ``labels`` sus textos) | vprofile
+    (perfil de volumen del rango visible: lo calcula la gráfica con ``opts``).
     text: etiqueta que se escribe al final de la línea.
     autoscale: False para que la serie no influya en el rango vertical.
     """
@@ -61,6 +62,7 @@ class Out:
     text: str | None = None
     labels: list | None = None
     autoscale: bool = True
+    opts: dict | None = None  # ajustes de los tipos que dibuja la gráfica por su cuenta (vprofile)
 
     def __post_init__(self):
         self.y = _np(self.y)
@@ -506,6 +508,17 @@ def _vwap(df, anchor):
     pv = (tp * df["Volume"]).groupby(key).cumsum()
     vv = df["Volume"].groupby(key).cumsum()
     return [Out("VWAP", _safe_div(pv, vv), color="#e040fb", width=1.6)]
+
+
+@indicator("vpvr", "Perfil de volumen (rango visible)", "VPVR", "Volumen", True,
+           [P("rows", "Filas", 24, 5, 200), P("va", "Área de valor %", 70, 10, 100),
+            P("width", "Ancho % de la gráfica", 30, 5, 80),
+            P("side", "Lado", "Derecha", options=["Derecha", "Izquierda"])],
+           description="Volumen negociado en cada nivel de precio de las velas visibles. Las barras fuertes "
+                       "son el área de valor y la línea punteada, el nivel con más volumen (POC).")
+def _vpvr(df, rows, va, width, side):
+    return [Out("VPVR", np.full(len(df), np.nan), kind="vprofile", show_value=False, autoscale=False,
+                opts={"rows": rows, "va": va, "width": width, "right": side == "Derecha"})]
 
 
 @indicator("zigzag", "ZigZag", "ZZ", "Tendencia", True,

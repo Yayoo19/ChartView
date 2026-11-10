@@ -16,6 +16,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import theme, volprofile
 from .indicators import FIB_LEVELS
 
 IMG_DIR = Path.home() / ".chartview" / "images"
@@ -31,33 +32,53 @@ TOOLS = [
     ("arrow", "↗", "Flecha (arrastrar)"),
     ("channel", "▱", "Canal paralelo (3 clics: dos para la línea y uno para el ancho)"),
     ("pitchfork", "Ψ", "Tridente de Andrews (3 clics: pivote, máximo y mínimo)"),
+    ("regression", "≋", "Canal de regresión: tendencia de los cierres ± 2 desviaciones (arrastrar sobre las velas)"),
     ("rect", "▭", "Rectángulo (arrastrar)"),
     ("ellipse", "◯", "Círculo / elipse (arrastrar)"),
     ("pen", "✎", "Dibujo libre (arrastrar)"),
     ("text", "T", "Texto (clic)"),
+    ("note", "📌", "Nota: texto en un recuadro (clic)"),
+    ("callout", "💬", "Globo de texto (arrastrar desde lo que señalas hasta donde va el texto)"),
     ("image", "🖼", "Imagen (clic o arrastrar para el tamaño)"),
     ("fib", "Fib", "Retroceso de Fibonacci (arrastrar de inicio a fin)"),
     ("fibext", "FE", "Extensión de Fibonacci por tendencia (3 clics: inicio, fin y retroceso)"),
+    ("fibfan", "FF", "Abanico de Fibonacci (arrastrar de inicio a fin)"),
+    ("fibtime", "FT", "Zonas de tiempo de Fibonacci (arrastrar: el ancho es la unidad de tiempo)"),
+    ("gannbox", "GB", "Caja de Gann (arrastrar de una esquina a la otra)"),
+    ("elliott", "EW", "Onda de impulso de Elliott (6 clics: inicio y ondas 1 a 5)"),
+    ("abc", "ABC", "Corrección ABC de Elliott (4 clics: inicio, A, B y C)"),
+    ("xabcd", "XA", "Patrón armónico XABCD (5 clics: X, A, B, C y D)"),
     ("measure", "📏", "Medir precio, % y velas (dos clics o arrastrar; también Shift+clic)"),
     ("long", "▲", "Posición larga con riesgo/beneficio (clic o arrastrar hasta el objetivo)"),
     ("short", "▼", "Posición corta con riesgo/beneficio (clic o arrastrar hasta el objetivo)"),
     ("avwap", "⚓", "VWAP anclado: clic en la vela de inicio"),
+    ("range", "⤡", "Rango de fecha y precio: cambio, %, velas y tiempo, fijo en la gráfica (arrastrar)"),
+    ("vprange", "▤", "Perfil de volumen de rango fijo (arrastrar sobre las velas a medir)"),
     ("eraser", "⌫", "Borrador: clic sobre un dibujo"),
 ]
 # grupos de la barra de dibujo: un botón por grupo; la flechita abre las demás herramientas del grupo
 TOOL_GROUPS = [
     ("Cursor", ["cursor"]),
     ("Líneas", ["hline", "hray", "vline", "trend", "ray", "arrow"]),
-    ("Canales", ["channel", "pitchfork"]),
+    ("Canales", ["channel", "pitchfork", "regression"]),
     ("Formas", ["rect", "ellipse", "pen"]),
-    ("Texto e imagen", ["text", "image"]),
-    ("Fibonacci", ["fib", "fibext"]),
-    ("Trading", ["measure", "long", "short", "avwap"]),
+    ("Texto e imagen", ["text", "note", "callout", "image"]),
+    ("Fibonacci y Gann", ["fib", "fibext", "fibfan", "fibtime", "gannbox"]),
+    ("Patrones", ["elliott", "abc", "xabcd"]),
+    ("Trading", ["measure", "range", "long", "short", "avwap", "vprange"]),
     ("Borrador", ["eraser"]),
 ]
-DRAG_TOOLS = {"trend", "ray", "arrow", "rect", "ellipse", "pen", "fib", "image", "long", "short"}
+DRAG_TOOLS = {"trend", "ray", "arrow", "rect", "ellipse", "pen", "fib", "image", "long", "short",
+              "fibfan", "fibtime", "gannbox", "regression", "range", "callout", "vprange"}
+BOX_TOOLS = {"rect", "ellipse", "image", "gannbox", "range", "vprange"}  # al arrastrar se ve un recuadro
 STICKY_TOOLS = {"pen", "eraser"}  # siguen activas después de usarlas
-THREE_CLICK_TOOLS = {"channel", "pitchfork", "fibext"}
+CLICK_COUNTS = {"channel": 3, "pitchfork": 3, "fibext": 3, "abc": 4, "xabcd": 5, "elliott": 6}  # dibujos de varios clics
+PRICE_ONLY_TOOLS = {"regression", "vprange"}  # se calculan con las velas: solo en la gráfica de precio
+TEXT_TYPES = {"text", "note", "callout"}
+WAVE_LABELS = {"elliott": ["0", "1", "2", "3", "4", "5"], "abc": ["0", "A", "B", "C"], "xabcd": ["X", "A", "B", "C", "D"]}
+FIB_TIMES = [0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+GANN_LEVELS = [0.25, 0.382, 0.5, 0.618, 0.75]
+VP_ROWS = [12, 24, 48, 96]
 FIB_EXTENSIONS = [(0, "#787b86"), (0.236, "#f44336"), (0.382, "#ff9800"), (0.5, "#4caf50"), (0.618, "#009688"),
                   (0.786, "#00bcd4"), (1, "#787b86"), (1.272, "#2962ff"), (1.618, "#9c27b0"), (2, "#e91e63"),
                   (2.618, "#f44336")]
@@ -192,7 +213,7 @@ class GeometryROI(pg.ROI):
         p.translate(-o.x(), -o.y())
         p.setPen(QtCore.Qt.NoPen)
         for poly, color in fills:
-            p.setBrush(QtGui.QColor(color))
+            p.setBrush(pg.mkColor(color))  # acepta QColor y «#rrggbbaa»
             p.drawPolygon(QtGui.QPolygonF([QtCore.QPointF(*q) for q in poly]))
         for a, b, pen in lines:
             p.setPen(pen if pen is not None else self.currentPen)
@@ -447,8 +468,8 @@ class DrawingLayer(QtCore.QObject):
                 else:
                     self.remove(did)
             return True
-        if t in THREE_CLICK_TOOLS:
-            self._three_click(vb, x, y, pane)
+        if t in CLICK_COUNTS:
+            self._multi_click(vb, x, y, pane)
             return True
         if t == "hline":
             self._add({"type": "hline", "points": [self.to_market(x, y, pane)]}, pane)
@@ -462,10 +483,10 @@ class DrawingLayer(QtCore.QObject):
         elif t == "vline":
             # una fecha cruza todos los paneles: se guarda en la gráfica de precio, a media altura
             self._add({"type": "vline", "points": [self.to_market(x, sum(self.main.getViewBox().viewRange()[1]) / 2)]})
-        elif t == "text":
+        elif t in ("text", "note"):
             text, ok = QtWidgets.QInputDialog.getMultiLineText(self.chart, "Texto", "Escribe el texto:")
             if ok and text.strip():
-                self._add({"type": "text", "points": [self.to_market(x, y, pane)], "text": text}, pane)
+                self._add({"type": t, "points": [self.to_market(x, y, pane)], "text": text}, pane)
         elif t == "image":
             self._place_image(vb, x, y, pane=pane)
         else:
@@ -512,6 +533,10 @@ class DrawingLayer(QtCore.QObject):
             return True
         if not ok or self.tool not in DRAG_TOOLS or ev.button() != QtCore.Qt.LeftButton:
             return False
+        if pane and self.tool in PRICE_ONLY_TOOLS:
+            if ev.isStart():
+                self.message.emit("Esta herramienta se calcula con las velas: úsala en la gráfica de precio.")
+            return True
         a = self._snap(vb, ev.buttonDownScenePos(), pane)
         b = self._snap(vb, ev.scenePos(), pane)
         t = self.tool
@@ -529,7 +554,7 @@ class DrawingLayer(QtCore.QObject):
             self._pen_pts.append((b.x(), b.y()))
             xs, ys = zip(*self._pen_pts)
             self._preview.setData(np.array(xs), np.array(ys))
-        elif t in ("rect", "ellipse", "image"):
+        elif t in BOX_TOOLS:
             xs = [a.x(), b.x(), b.x(), a.x(), a.x()]
             ys = [a.y(), a.y(), b.y(), b.y(), a.y()]
             self._preview.setData(np.array(xs), np.array(ys))
@@ -545,22 +570,28 @@ class DrawingLayer(QtCore.QObject):
                 self._place_image(vb, a.x(), a.y(), b.x(), b.y(), pane)
             elif t in ("long", "short"):
                 self._add_position(t, vb, a.x(), a.y(), pane, b.x() - a.x(), b.y() - a.y())
+            elif t == "callout":
+                text, ok = QtWidgets.QInputDialog.getMultiLineText(self.chart, "Globo de texto", "Escribe el texto:")
+                if ok and text.strip():
+                    self._add({"type": t, "points": [p1, p2], "text": text}, pane)
             else:
                 self._add({"type": t, "points": [p1, p2]}, pane)
             if t not in STICKY_TOOLS:
                 self._reset_tool()
         return True
 
-    # ---------------------------------------------- herramientas de 3 clics
-    def _three_click(self, vb, x, y, pane):
+    # ------------------------------------------ herramientas de varios clics
+    def _multi_click(self, vb, x, y, pane):
         if self._pending is None:
             self._pending = {"tool": self.tool, "pane": pane, "points": []}
-            self.message.emit("Faltan 2 clics. Esc o clic derecho para cancelar.")
         elif self._pending["pane"] != pane:
             self.message.emit("Termina el dibujo en el mismo panel donde lo empezaste.")
             return
         self._pending["points"].append(self.to_market(x, y, pane))
-        if len(self._pending["points"]) == 3:
+        left = CLICK_COUNTS[self._pending["tool"]] - len(self._pending["points"])
+        if left:
+            self.message.emit(("Falta 1 clic" if left == 1 else f"Faltan {left} clics") + ". Esc o clic derecho para cancelar.")
+        else:
             pending, self._pending = self._pending, None
             self._cancel_preview()
             self._add({"type": pending["tool"], "points": pending["points"]}, pane)
@@ -658,15 +689,19 @@ class DrawingLayer(QtCore.QObject):
         rect.setBrush(fill)
         diag = pg.PlotCurveItem(np.array([x1, x2]), np.array([y1, y2]), pen=pg.mkPen(color, width=1))
         bars = int(round(abs(x2 - x1)))
-        pct = f" ({(p2 / p1 - 1) * 100:+.2f}%)" if p1 else ""
-        text = (f"{p2 - p1:+,.{2 if abs(p2 - p1) >= 1 else 4}f}{pct}\n"
-                f"{bars} {'vela' if bars == 1 else 'velas'} · {self._duration(abs(m['b'][0] - m['a'][0]))}")
+        text = self._range_text(p1, p2, bars, abs(m["b"][0] - m["a"][0]))
         label = pg.TextItem(text, color="#ffffff", fill=QtGui.QColor(color), anchor=(0.5, 1 if y2 >= y1 else 0))
         label.setPos((x1 + x2) / 2, max(y1, y2) if y2 >= y1 else min(y1, y2))
         for it in (rect, diag, label):
             it.setZValue(70)
             plot.addItem(it, ignoreBounds=True)
             self._measure_items.append((it, plot))
+
+    def _range_text(self, p1, p2, bars, secs) -> str:
+        """«+12.50 (+3.10%)» y, abajo, «8 velas · 11 días»."""
+        pct = f" ({(p2 / p1 - 1) * 100:+.2f}%)" if p1 else ""
+        return (f"{p2 - p1:+,.{2 if abs(p2 - p1) >= 1 else 4}f}{pct}\n"
+                f"{bars} {'vela' if bars == 1 else 'velas'} · {self._duration(secs)}")
 
     @staticmethod
     def _duration(secs: float) -> str:
@@ -812,8 +847,12 @@ class DrawingLayer(QtCore.QObject):
         wm = m.addMenu("Grosor")
         for w in (1, 2, 3, 4, 6):
             wm.addAction(str(w), lambda w=w: self._restyle(d, width=w))
-        if d["type"] == "text":
+        if d["type"] in TEXT_TYPES:
             m.addAction("Editar texto…", lambda: self._edit_text(d))
+        if d["type"] == "vprange":
+            rm = m.addMenu("Filas del perfil")
+            for n in VP_ROWS:
+                rm.addAction(str(n), lambda n=n: self._restyle(d, rows=n))
         m.addSeparator()
         m.addAction("Duplicar", lambda: self.duplicate(d))
         m.addAction("Desbloquear" if d.get("locked") else "Bloquear", lambda: self._restyle(d, locked=not d.get("locked")))
@@ -905,7 +944,7 @@ class DrawingLayer(QtCore.QObject):
             price = d["points"][0][1]
             line = pg.InfiniteLine(pos=pts[0][1], angle=0, movable=True, pen=pen, hoverPen=hover,
                                    label=_fmt(price),
-                                   labelOpts={"position": 0.04, "color": color, "fill": "#131722cc",
+                                   labelOpts={"position": 0.04, "color": color, "fill": theme.c("#131722cc"),
                                               "anchors": [(0, 1), (0, 1)]})
 
             def moved(ln=line):
@@ -968,9 +1007,14 @@ class DrawingLayer(QtCore.QObject):
             item = pg.PlotCurveItem(xs, ys, pen=pen)
             self._own(did, item, plot)
 
-        elif t == "text":
+        elif t in ("text", "note"):
             size = 9 + 2 * width
-            item = DraggableText(d.get("text", ""), color=color, anchor=(0, 0))
+            if t == "note":  # recuadro del color del dibujo con texto blanco
+                size = 8 + width
+                item = DraggableText(d.get("text", ""), color="#ffffff", anchor=(0, 0),
+                                     fill=QtGui.QColor(color), border=pg.mkPen(color))
+            else:
+                item = DraggableText(d.get("text", ""), color=color, anchor=(0, 0))
             f = QtGui.QFont()
             f.setPointSize(size)
             f.setBold(width >= 3)
@@ -1005,7 +1049,8 @@ class DrawingLayer(QtCore.QObject):
                 lambda r: self._commit(d, [self.to_market(x, y, pane) for x, y in self._roi_points(r)]))
             update_fib()
 
-        elif t in ("hray", "arrow", "channel", "pitchfork", "fibext", "position", "avwap"):
+        elif t in ("hray", "arrow", "channel", "pitchfork", "fibext", "position", "avwap", "fibfan", "fibtime",
+                   "gannbox", "elliott", "abc", "xabcd", "regression", "range", "callout", "vprange"):
             self._render_geometry(d, t, pts, plot, pane, color, width, pen, hover, y2p, p2y)
 
     # ------------------------------------------- dibujos de varios puntos
@@ -1133,6 +1178,170 @@ class DrawingLayer(QtCore.QObject):
                 tx_ratio.setText(f"{'Larga' if target >= entry else 'Corta'}  R/B {ratio}")
                 tx_ratio.setPos(x1, ye)
 
+        elif t == "fibfan":
+            fan_pens = [(r, pg.mkPen(c, width=1)) for r, c in FIB_LEVELS]
+
+            def geometry(p):
+                (x1, y1), (x2, y2) = p
+                lines = [(p[0], p[1], dashed)]
+                if abs(x2 - x1) < 1e-9:
+                    return lines, []
+                far = self._far_x(x2 > x1)
+                for r, level_pen in fan_pens:  # cada rayo pasa por un nivel del retroceso, medido en la vela final
+                    slope = (y2 - (y2 - y1) * r - y1) / (x2 - x1)
+                    lines.append((p[0], (far, y1 + slope * (far - x1)), level_pen))
+                return lines, []
+
+        elif t == "fibtime":
+            zones = [self._own(did, pg.InfiniteLine(angle=90, movable=False, pen=thin, label=str(k),
+                                                    labelOpts={"position": 0.03, "color": color}), plot)
+                     for k in FIB_TIMES]
+
+            def geometry(p):
+                return [(p[0], p[1], dashed)], []  # la unidad de tiempo; se mueve con sus dos asas
+
+            def follow(p):
+                for k, line in zip(FIB_TIMES, zones):
+                    line.setPos(p[0][0] + (p[1][0] - p[0][0]) * k)
+
+        elif t == "gannbox":
+            def geometry(p):
+                (x1, y1), (x2, y2) = p
+                box = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                lines = [(box[i], box[(i + 1) % 4], None) for i in range(4)]
+                lines += [(box[0], box[2], dashed), (box[3], box[1], dashed)]
+                for r in GANN_LEVELS:
+                    yy, xx = y1 + (y2 - y1) * r, x1 + (x2 - x1) * r
+                    lines += [((x1, yy), (x2, yy), thin), ((xx, y1), (xx, y2), thin)]
+                return lines, [(box, tint)]
+
+        elif t in ("elliott", "abc"):
+            marks = self._marks(did, WAVE_LABELS[t], color, plot)
+
+            def geometry(p):
+                return [(a, b, None) for a, b in zip(p, p[1:])], []
+
+            def follow(p):
+                self._place_marks(marks, p, vb)
+
+        elif t == "xabcd":
+            marks = self._marks(did, WAVE_LABELS[t], color, plot)
+            ratios = [self._own(did, pg.TextItem("", color=color, anchor=(0.5, 0.5), fill=theme.c("#131722cc")), plot)
+                      for _ in range(4)]
+
+            def geometry(p):
+                X, A, B, C, D = p
+                lines = [(X, A, None), (A, B, None), (B, C, None), (C, D, None),
+                         (X, B, dashed), (A, C, dashed), (B, D, dashed), (X, D, dashed)]
+                return lines, [([X, A, B], tint), ([B, C, D], tint)]
+
+            def follow(p):
+                self._place_marks(marks, p, vb)
+                X, A, B, C, D = (y2p(q[1]) for q in p)
+                ratio = lambda num, den: f"{abs(num / den):.3f}" if den else "—"  # noqa: E731
+                # sobre cada línea punteada, cuánto retrocede o extiende un tramo respecto al anterior
+                values = [ratio(B - A, A - X), ratio(C - B, B - A), ratio(D - C, C - B), ratio(D - A, A - X)]
+                for tx, text, (i, j) in zip(ratios, values, ((0, 2), (1, 3), (2, 4), (0, 4))):
+                    tx.setText(text)
+                    tx.setPos((p[i][0] + p[j][0]) / 2, (p[i][1] + p[j][1]) / 2)
+
+        elif t == "regression":
+            cache = {}
+
+            def fit(p):
+                """(primera vela, última, pendiente, ordenada, 2 desviaciones) de los cierres entre las dos asas."""
+                a, b = self._bar_span(p)
+                if b - a < 2:
+                    return None
+                if cache.get("key") != (a, b):
+                    y = self._p2y_arr(self.df["Close"].to_numpy(float)[a:b + 1])
+                    x = np.arange(a, b + 1, dtype=float)
+                    m = np.isfinite(y)
+                    cache["key"], cache["val"] = (a, b), None
+                    if m.sum() >= 3:
+                        k, c0 = np.polyfit(x[m], y[m], 1)
+                        cache["val"] = (a, b, float(k), float(c0), 2 * float(np.std(y[m] - (k * x[m] + c0))))
+                return cache["val"]
+
+            def geometry(p):
+                got = fit(p)
+                if got is None:
+                    return [(p[0], p[1], dashed)], []
+                a, b, k, c0, dev = got
+                ya, yb = k * a + c0, k * b + c0
+                top, bottom = ((a, ya + dev), (b, yb + dev)), ((a, ya - dev), (b, yb - dev))
+                return ([((a, ya), (b, yb), dashed), (*top, None), (*bottom, None)],
+                        [([top[0], top[1], bottom[1], bottom[0]], tint)])
+
+            def follow(p):
+                got = fit(p)
+                if got is None or guard[0]:
+                    return
+                _a, _b, k, c0, _dev = got
+                guard[0] = True  # las asas quedan sobre la línea central
+                for i in (0, 1):
+                    want = k * p[i][0] + c0
+                    if abs(p[i][1] - want) > 1e-9:
+                        roi.movePoint(roi.handles[i]["item"], QtCore.QPointF(p[i][0], want), finish=False, coords="parent")
+                guard[0] = False
+
+        elif t == "range":
+            label = self._own(did, pg.TextItem("", color="#ffffff", fill=QtGui.QColor(color), anchor=(0.5, 1)), plot)
+
+            def geometry(p):
+                (x1, y1), (x2, y2) = p
+                xm, ym = (x1 + x2) / 2, (y1 + y2) / 2
+                box = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                lines = [(box[i], box[(i + 1) % 4], thin) for i in range(4)]
+                return lines + [((xm, y1), (xm, y2), None), ((x1, ym), (x2, ym), None)], [(box, tint)]
+
+            def follow(p):
+                (x1, y1), (x2, y2) = p
+                label.setText(self._range_text(y2p(y1), y2p(y2), int(round(abs(x2 - x1))),
+                                               abs(self.x2t(x2) - self.x2t(x1))))
+                above = (y2 >= y1) != vb.yInverted()  # del lado hacia donde se midió
+                label.setAnchor((0.5, 1) if above else (0.5, 0))
+                label.setPos((x1 + x2) / 2, y2)
+
+        elif t == "callout":
+            bubble = self._own(did, pg.TextItem(d.get("text", ""), color="#ffffff", fill=QtGui.QColor(color),
+                                                border=pg.mkPen(color), anchor=(0, 0.5)), plot)
+
+            def geometry(p):
+                return [(p[0], p[1], None)], []
+
+            def follow(p):
+                bubble.setAnchor((0, 0.5) if p[1][0] >= p[0][0] else (1, 0.5))
+                bubble.setPos(*p[1])
+
+        elif t == "vprange":
+            cache = {}
+            rows = int(d.get("rows", 24))
+            poc_pen = pg.mkPen(volprofile.POC_COLOR, width=1, style=QtCore.Qt.DashLine)
+
+            def geometry(p):
+                a, b = self._bar_span(p)
+                if b < a:
+                    return [(p[0], p[1], dashed)], []
+                if cache.get("key") != (a, b):
+                    part = self.df.iloc[a:b + 1]
+                    cache["key"] = (a, b)
+                    cache["val"] = volprofile.compute(
+                        self._p2y_arr(part["Low"]), self._p2y_arr(part["High"]), part["Volume"].to_numpy(float),
+                        (part["Close"] >= part["Open"]).to_numpy(), rows)
+                prof = cache["val"]
+                if prof is None:
+                    return [(p[0], p[1], dashed)], []
+                lo, hi = float(prof[0][0]), float(prof[0][-1])
+                x0, x1 = a - 0.5, b + 0.5
+                rects, poc = volprofile.bars(prof, 70, x0, (x1 - x0) * 0.85)
+                fills = [([(x, y), (x + w, y), (x + w, y + h), (x, y + h)], c) for x, y, w, h, c in rects if w]
+                box = [(x0, lo), (x1, lo), (x1, hi), (x0, hi)]
+                lines = [(box[i], box[(i + 1) % 4], thin) for i in range(4)]
+                if poc is not None:
+                    lines.append(((x0, poc), (x1, poc), poc_pen))
+                return lines, fills
+
         else:  # avwap
             curve = self._own(did, pg.PlotCurveItem(pen=pg.mkPen(color, width=max(width, 1.5))), plot)
             label = self._own(did, pg.TextItem("", color=color, anchor=(0, 0.5)), plot)
@@ -1164,6 +1373,43 @@ class DrawingLayer(QtCore.QObject):
             follow(pts)
         roi.sigRegionChangeFinished.connect(
             lambda r: self._commit(d, [self.to_market(x, y, pane) for x, y in self._roi_points(r)]))
+
+    def _bar_span(self, p):
+        """Primera y última vela entre dos puntos de la vista, dentro de los datos."""
+        a, b = sorted((int(round(p[0][0])), int(round(p[1][0]))))
+        return max(a, 0), min(b, len(self.df) - 1)
+
+    def _p2y_arr(self, prices):
+        """Como ``p2y``, para una serie de precios."""
+        a = np.asarray(prices, dtype=float)
+        if getattr(self, "pct_base", None):
+            return (a / self.pct_base - 1) * 100
+        if not self.log:
+            return a
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(a > 0, np.log10(np.where(a > 0, a, 1.0)), np.nan)
+
+    def _marks(self, did, labels, color, plot):
+        """Letras o números de un patrón (ondas de Elliott, XABCD), uno por punto."""
+        font = QtGui.QFont()
+        font.setPointSize(10)
+        font.setBold(True)
+        marks = []
+        for text in labels:
+            mark = self._own(did, pg.TextItem(text, color=color, anchor=(0.5, 1)), plot)
+            mark.setFont(font)
+            marks.append(mark)
+        return marks
+
+    @staticmethod
+    def _place_marks(marks, p, vb):
+        """Cada marca va del lado de afuera de su punto: arriba en los techos y abajo en los pisos."""
+        flip = vb.yInverted()
+        for i, (mark, (x, y)) in enumerate(zip(marks, p)):
+            near = [p[j][1] for j in (i - 1, i + 1) if 0 <= j < len(p)]
+            high = y >= sum(near) / len(near) if near else True
+            mark.setAnchor((0.5, 1) if high != flip else (0.5, 0))
+            mark.setPos(x, y)
 
     @staticmethod
     def _roi_points(roi):
