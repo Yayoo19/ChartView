@@ -545,6 +545,9 @@ def _num(v):
     return f if np.isfinite(f) else None
 
 
+MINOR_CURRENCIES = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ZAC": "ZAR", "ILA": "ILS"}
+
+
 def fundamentals(symbol: str) -> dict:
     """Reportes trimestrales, estimaciones y opinión de analistas (Yahoo Finance).
 
@@ -565,6 +568,12 @@ def fundamentals(symbol: str) -> dict:
 
     out: dict = {}
     today = pd.Timestamp.now().normalize()
+
+    # de «info» y no de fast_info: esta multiplica por el precio en peniques y en Londres da 100 veces más
+    info = get("info") or {}
+    out["market_cap"] = _num(info.get("marketCap"))
+    # Yahoo cotiza algunas bolsas en centavos, pero la capitalización siempre viene en la moneda completa
+    out["market_cap_currency"] = MINOR_CURRENCIES.get(info.get("currency"), info.get("currency") or "")
 
     ed = get("earnings_dates")
     if ed is not None and not ed.empty:
@@ -612,7 +621,7 @@ def fundamentals(symbol: str) -> dict:
         out["dividend"] = {"ex": cal.get("Ex-Dividend Date"), "pay": cal.get("Dividend Date")}
     currency = next((v.get("currency") for v in out["eps_est"].values() if v.get("currency")), None)
     out["currency"] = currency or ""
-    has_data = any(out.get(k) for k in ("history", "next", "eps_est", "targets", "recs", "changes"))
+    has_data = any(out.get(k) for k in ("market_cap", "history", "next", "eps_est", "targets", "recs", "changes"))
     return out if has_data else {}
 
 

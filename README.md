@@ -59,6 +59,7 @@ Hay un solo buscador (arriba a la izquierda, Ctrl+L) para todos los mercados. Es
   - **Mapa de calor** (también Ver → Mapa de calor de la lista o Ctrl+M): un cuadro por símbolo de la lista activa, agrupados por sección y ordenados de mayor a menor cambio del día. Verde si sube y rojo si baja, más intenso cuanto mayor es el cambio; el selector de la derecha (± 1 % a ± 10 %) fija con qué cambio se llega al color más fuerte. Un clic abre el símbolo. Todos los cuadros miden lo mismo. Usa las mismas cotizaciones que la lista, así que se actualiza con ella; para ver otra lista, cámbiala en el panel de listas.
 - **Debajo de la gráfica:** cuánta historia ver (1D, 5D, 1M, 3M, 6M, YTD, 1A, 2A, 5A, 10A, Todo), escala Log, actualización Auto, Ver todo y Recientes. En intervalos intradía se desactivan los rangos que Yahoo no ofrece.
 - **Panel de análisis** (📊 a la derecha, Ver → Panel de análisis o Ctrl+E), para acciones con cobertura de analistas:
+  - Market cap de la empresa, en su moneda de cotización. También aparece en acciones sin cobertura de analistas.
   - Próximo reporte trimestral con su fecha, la utilidad por acción y los ingresos estimados.
   - Historial de reportes: estimado contra real y sorpresa en %.
   - Estimaciones del trimestre y año actual y siguiente.

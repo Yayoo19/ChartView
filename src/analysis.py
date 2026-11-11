@@ -190,6 +190,9 @@ class AnalysisPanel(QtWidgets.QScrollArea):
         self._clear()
         cur = d.get("currency", "")
         self._label(f"<b style='font-size:15px'>{symbol}</b>&nbsp; <span style='color:{MUTED}'>{name}</span>")
+        if d.get("market_cap"):
+            self._label(f"<span style='color:{MUTED}'>Market cap:</span> <b>{fmt_big(d['market_cap'])}</b> "
+                        f"{d.get('market_cap_currency', '')}", size=13)
 
         # ---------------- próximo reporte
         nxt = d.get("next")
