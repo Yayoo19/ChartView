@@ -81,6 +81,7 @@ class Param:
     maximum: float = 1000
     step: float | None = None
     options: list | None = None
+    in_label: bool = True  # False: no se escribe en la leyenda
 
     @property
     def is_int(self) -> bool:
@@ -107,6 +108,8 @@ class IndicatorDef:
         vals = []
         for p in self.params:
             v = params.get(p.name, p.default)
+            if not p.in_label:
+                continue
             if p.options is not None:
                 if v != p.default:
                     vals.append(str(v))
@@ -128,8 +131,8 @@ class Computed:
 REGISTRY: dict[str, IndicatorDef] = {}
 
 
-def P(name, label, default, minimum=1, maximum=1000, step=None, options=None) -> Param:
-    return Param(name, label, default, minimum, maximum, step, options)
+def P(name, label, default, minimum=1, maximum=1000, step=None, options=None, in_label=True) -> Param:
+    return Param(name, label, default, minimum, maximum, step, options, in_label)
 
 
 def indicator(key, name, abbr, category, overlay, params=(), levels=(), yrange=None, description=""):
@@ -525,11 +528,23 @@ def _vpvr(df, rows, va, width, side):
            [P("dev", "Desviación %", 5.0, 0.1, 100, 0.5)], description="Une máximos y mínimos relevantes.")
 def _zigzag(df, dev):
     h, l = _np(df["High"]), _np(df["Low"])
+    piv, direction, ext = _zigzag_pivots(h, l, dev)
+    if len(h) < 2:
+        return [Out("ZigZag", piv)]
+    if direction != 0:
+        piv[ext] = h[ext] if direction == 1 else l[ext]
+    line = pd.Series(piv).interpolate(limit_area="inside")
+    return [Out("ZigZag", line, color="#ffeb3b", width=1.6)]
+
+
+def _zigzag_pivots(h, l, dev):
+    """Giros confirmados por una reversa de ``dev`` %. Devuelve (precios por vela, NaN si no hay giro;
+    dirección del tramo en curso: 1 sube, -1 baja, 0 sin definir; vela del extremo de ese tramo)."""
     n = len(h)
     d = dev / 100
     piv = np.full(n, np.nan)
     if n < 2:
-        return [Out("ZigZag", piv)]
+        return piv, 0, 0
     direction, hi, lo, ext = 0, 0, 0, 0
     for i in range(n):
         if direction == 0:
@@ -555,10 +570,7 @@ def _zigzag(df, dev):
             elif h[i] >= l[ext] * (1 + d):
                 piv[ext] = l[ext]
                 direction, ext = 1, i
-    if direction != 0:
-        piv[ext] = h[ext] if direction == 1 else l[ext]
-    line = pd.Series(piv).interpolate(limit_area="inside")
-    return [Out("ZigZag", line, color="#ffeb3b", width=1.6)]
+    return piv, direction, ext
 
 
 @indicator("fractals", "Fractales de Williams", "Fractales", "Tendencia", True, [P("n", "Velas a cada lado", 2, 1, 20)])
@@ -1073,16 +1085,39 @@ def _hline(n, start, value, end=None):
     return y
 
 
+def _last_swing(df, dev):
+    """Velas y precios (máximo, mínimo) del último tramo marcado por el ZigZag, o None si no hay ninguno."""
+    h, l = _np(df["High"]), _np(df["Low"])
+    piv, direction, ext = _zigzag_pivots(h, l, dev)
+    if direction == 0:
+        return None
+    pts = [int(i) for i in np.flatnonzero(np.isfinite(piv))]
+    if not pts:
+        return None
+    last = pts[-1]
+    # el tramo en curso va contra el último giro; solo se mide si ya rebasó el inicio del tramo anterior
+    beyond = len(pts) < 2 or (l[ext] < piv[pts[-2]] if direction == -1 else h[ext] > piv[pts[-2]])
+    a, b = (last, ext) if beyond else (pts[-2], last)
+    hi, lo = (a, b) if h[a] > h[b] else (b, a)
+    return hi, lo, h[hi], l[lo]
+
+
 @indicator("fib_retr", "Retroceso de Fibonacci (automático)", "Fibo", FIB, True,
            [P("length", "Velas a analizar", 150, 10, 100000),
-            P("ext", "Extensiones", "Sí", options=SI_NO), P("fill", "Relleno", "Sí", options=SI_NO)],
+            P("ext", "Extensiones", "Sí", options=SI_NO), P("fill", "Relleno", "Sí", options=SI_NO),
+            P("mode", "Tramo", "Máximo y mínimo", options=["Máximo y mínimo", "Último swing"]),
+            P("dev", "Desviación % del swing", 5.0, 0.1, 100, 0.5, in_label=False)],
            description="Toma el máximo y el mínimo de las últimas N velas y traza los niveles 23.6%, 38.2%, "
                        "50%, 61.8% y 78.6%. Si el mínimo ocurrió primero (tramo alcista) los retrocesos se "
                        "miden hacia abajo desde el máximo; si no, hacia arriba desde el mínimo. Las "
-                       "extensiones (127.2%, 161.8%, 200%, 261.8%) proyectan objetivos más allá del tramo.")
-def _fib_retr(df, length, ext, fill):
+                       "extensiones (127.2%, 161.8%, 200%, 261.8%) proyectan objetivos más allá del tramo. Con "
+                       "Tramo = Último swing mide el último movimiento del ZigZag en lugar del máximo y el "
+                       "mínimo de N velas: «Desviación» es la reversa mínima para contar un giro, y las "
+                       "velas a analizar no se usan.")
+def _fib_retr(df, length, ext, fill, mode, dev):
     n = len(df)
-    hi, lo, ph, pl = _swing(df, length)
+    # sin ningún giro todavía (poca historia o desviación muy grande) se usa el máximo y el mínimo
+    hi, lo, ph, pl = (mode == "Último swing" and _last_swing(df, dev)) or _swing(df, length)
     rng = ph - pl
     up = lo < hi
     start = min(hi, lo)

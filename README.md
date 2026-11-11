@@ -151,7 +151,7 @@ La configuración se guarda en `%USERPROFILE%\.chartview\config.json`.
 - **Tendencia:** Parabolic SAR, Supertrend, Chandelier Exit, ZigZag, Fractales, ADX/DMI, Aroon, Oscilador Aroon, Vortex.
 - **Osciladores:** RSI, MACD, Estocástico, StochRSI, CCI, Williams %R, ROC, Momentum, TRIX, Awesome, Ultimate, PPO, TSI, Elder Ray, DPO, Coppock, Fisher, KST, CMO, RVGI, BOP, Squeeze Momentum, Schaff Trend Cycle, Connors RSI.
 - **Volumen:** Volumen, VWAP, Perfil de volumen (rango visible), OBV, MFI, CMF, A/D, Chaikin Oscillator, Force Index, EOM, PVT, Klinger.
-- **Fibonacci y Gann:** Retroceso de Fibonacci automático (con extensiones), Zonas de tiempo de Fibonacci, Bandas de Fibonacci, Abanico de Gann, Cuadrado de 9 de Gann, Gann HiLo Activator. Se calculan sobre el máximo y el mínimo de las últimas N velas (parámetro «Velas a analizar»).
+- **Fibonacci y Gann:** Retroceso de Fibonacci automático (con extensiones), Zonas de tiempo de Fibonacci, Bandas de Fibonacci, Abanico de Gann, Cuadrado de 9 de Gann, Gann HiLo Activator. Se calculan sobre el máximo y el mínimo de las últimas N velas (parámetro «Velas a analizar»). El Retroceso de Fibonacci también puede medir solo el movimiento más reciente: en su configuración elige Tramo → «Último swing» y ajusta «Desviación %», la reversa mínima para que cuente un giro.
 - **Volatilidad:** ATR, NATR, Desviación estándar, Volatilidad histórica, %B, Ancho de Bollinger, Choppiness, Mass Index, Ulcer Index.
 
 ### Perfil de volumen
