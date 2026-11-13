@@ -456,17 +456,62 @@ def _yahoo_candles(symbol: str, yi: str, period: str) -> tuple[pd.DataFrame, dic
     df = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
-    df = df[~df.index.duplicated(keep="last")].dropna(subset=["Close"])
-    for col in ("Open", "High", "Low"):
-        df[col] = df[col].fillna(df["Close"])
-    df["Volume"] = df["Volume"].fillna(0)
+    df = df[~df.index.duplicated(keep="last")]
     try:
         meta = dict(t.history_metadata or {})
     except Exception:
         meta = {}
+    _close_last_bar(df, meta, yi)
+    df = df.dropna(subset=["Close"])
+    for col in ("Open", "High", "Low"):
+        df[col] = df[col].fillna(df["Close"])
+    df["Volume"] = df["Volume"].fillna(0)
     if yi == "1d" and meta.get("instrumentType") == "CRYPTOCURRENCY":
         df = _fill_crypto_days(t, df)
     return df, meta
+
+
+_BAR_SPAN = {"1d": pd.Timedelta(days=1), "1wk": pd.Timedelta(days=7)}
+
+
+# las velas semanales y mensuales de Yahoo se recalculan tarde y a veces traen el cierre del día anterior;
+# solo se corrigen donde la sesión cabe en el día (en futuros y divisas la sesión cruza la medianoche)
+_SESSION_IN_DAY = {"EQUITY", "ETF", "INDEX", "MUTUALFUND"}
+
+
+def _close_last_bar(df: pd.DataFrame, meta: dict, yi: str) -> None:
+    """Pone el último precio en la vela en curso.
+
+    - Con el mercado cerrado, Yahoo manda la vela de hoy con apertura, máximo y volumen pero sin cierre:
+      se completa para no perder el día (antes la vela se descartaba).
+    - La vela semanal o mensual puede venir con el cierre del día anterior: se actualiza al precio actual.
+    """
+    if df.empty or not np.isfinite(df["Open"].iloc[-1]):
+        return
+    if np.isfinite(df["Close"].iloc[-1]) and not (
+            yi in ("1wk", "1mo") and meta.get("instrumentType") in _SESSION_IN_DAY):
+        return
+    price, when = _num(meta.get("regularMarketPrice")), meta.get("regularMarketTime")
+    if price is None or when is None:
+        return
+    try:
+        when = pd.Timestamp(when, unit="s", tz="UTC") if isinstance(when, (int, float)) else pd.Timestamp(when)
+        if when.tzinfo is not None:
+            when = when.tz_convert(meta.get("exchangeTimezoneName") or "UTC").tz_localize(None)
+    except (ValueError, TypeError):
+        return
+    start = df.index[-1]
+    if yi == "1mo":  # los meses no miden lo mismo: se compara el mes y no una duración
+        inside = (when.year, when.month) == (start.year, start.month) and when >= start
+    else:
+        span = _BAR_SPAN.get(yi) or pd.Timedelta(yi.replace("m", "min") if yi.endswith("m") else yi)
+        inside = start <= when < start + span
+    if not inside:
+        return  # el precio es de otra vela: mejor no inventar el cierre
+    row = df.index[-1]
+    df.loc[row, "Close"] = price
+    df.loc[row, "High"] = np.nanmax([df.loc[row, "High"], df.loc[row, "Open"], price])
+    df.loc[row, "Low"] = np.nanmin([df.loc[row, "Low"], df.loc[row, "Open"], price])
 
 
 def _fill_crypto_days(t, df: pd.DataFrame) -> pd.DataFrame:
