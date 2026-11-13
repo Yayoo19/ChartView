@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 warnings.filterwarnings("ignore", module="yfinance")
 
@@ -730,15 +731,42 @@ def quotes(symbols: list[str]) -> dict[str, tuple[float, float]]:
                      progress=False, threads=True, auto_adjust=False)
     if df is None or df.empty:
         return out
+    closes, pending = {}, []
     for s in symbols:
         try:
             sub = df[s] if isinstance(df.columns, pd.MultiIndex) else df
-            c = sub["Close"].dropna()
-            if c.empty:
-                continue
-            last = float(c.iloc[-1])
-            chg = (last / float(c.iloc[-2]) - 1) * 100 if len(c) > 1 else np.nan
-            out[s] = (last, chg)
+            # al bajar varios mercados juntos, cada uno trae filas vacías de los días que solo tienen otros
+            # (los futuros y las divisas ya van en la sesión de mañana)
+            sub = sub[sub["Open"].notna() | sub["Close"].notna()]
+            closes[s] = sub["Close"]
+            # con el mercado cerrado, la vela de hoy llega con apertura pero sin cierre (igual que en la gráfica)
+            if len(sub) and not np.isfinite(sub["Close"].iloc[-1]) and np.isfinite(sub["Open"].iloc[-1]):
+                pending.append(s)
         except Exception:
             continue
+    for s, price in _last_prices(pending).items():
+        c = closes[s].copy()
+        c.iloc[-1] = price
+        closes[s] = c
+    for s, c in closes.items():
+        c = c.dropna()
+        if c.empty:
+            continue
+        last = float(c.iloc[-1])
+        chg = (last / float(c.iloc[-2]) - 1) * 100 if len(c) > 1 else np.nan
+        out[s] = (last, chg)
     return out
+
+
+def _last_prices(symbols: list[str]) -> dict[str, float]:
+    """Último precio de cada símbolo (el mismo que usa la gráfica), consultados en paralelo."""
+    def one(s):
+        try:
+            return s, _num(yf.Ticker(s).fast_info.last_price)
+        except Exception:
+            return s, None
+
+    if not symbols:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as pool:
+        return {s: p for s, p in pool.map(one, symbols) if p is not None}
